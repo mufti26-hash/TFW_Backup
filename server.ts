@@ -2,8 +2,6 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import cors from 'cors';
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, doc, getDoc, setDoc, onSnapshot, terminate, setLogLevel } from 'firebase/firestore';
 import { 
   RIDES, 
   OPERATORS, 
@@ -18,6 +16,7 @@ import {
   getDhakaDateString,
   formatDhakaTime
 } from './constants';
+import { saveToSqlite, loadFromSqlite, getSqliteStats } from './sqliteDb';
 
 // Ensure production mode if running from compiled server.cjs bundle
 if (typeof __filename !== 'undefined' && __filename.endsWith('.cjs')) {
@@ -32,17 +31,9 @@ process.on('unhandledRejection', (reason) => {
   console.error('⚠️ Unhandled Rejection in server process:', reason);
 });
 
-// Silence background gRPC and Firestore client stream error logs
-try {
-  setLogLevel('silent');
-} catch (e) {
-  // ignore
-}
-
 const PORT = 3000;
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'database.json');
-const QUOTA_FILE = path.join(DATA_DIR, 'firestore_quota.json');
 
 // Initialize Data Directory
 if (!fs.existsSync(DATA_DIR)) {
@@ -54,132 +45,8 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 // -------------------------------------------------------------
-// Firebase Firestore Cloud Persistence Layer & Quota Guard
+// Offline-Only Local SQLite Persistence Layer
 // -------------------------------------------------------------
-let firestoreDb: any = null;
-let isFirestoreReady = false;
-let firestoreSyncTimeout: NodeJS.Timeout | null = null;
-let lastFirestoreSenderId: string | null = null;
-let firestoreQuotaExceededUntil = 0;
-let hasLoggedQuotaWarning = false;
-
-// Check if quota limit was already reached today
-try {
-  if (fs.existsSync(QUOTA_FILE)) {
-    const qData = JSON.parse(fs.readFileSync(QUOTA_FILE, 'utf-8'));
-    if (qData && qData.blockedUntil && Number(qData.blockedUntil) > Date.now()) {
-      firestoreQuotaExceededUntil = Number(qData.blockedUntil);
-      console.log(`ℹ️ Firestore daily write quota limit active until ${new Date(firestoreQuotaExceededUntil).toISOString()}. Using high-speed local disk persistence.`);
-    }
-  }
-} catch (e) {
-  // ignore
-}
-
-function persistQuotaBlock(durationMs: number = 24 * 60 * 60 * 1000) {
-  firestoreQuotaExceededUntil = Date.now() + durationMs;
-  isFirestoreReady = false;
-  const currentDb = firestoreDb;
-  firestoreDb = null;
-  if (currentDb) {
-    try {
-      terminate(currentDb).catch(() => {});
-    } catch (e) {}
-  }
-  try {
-    fs.writeFileSync(QUOTA_FILE, JSON.stringify({
-      blockedUntil: firestoreQuotaExceededUntil,
-      reason: 'Free daily write units per project (free tier database) quota limit reached',
-      updatedAt: new Date().toISOString()
-    }, null, 2), 'utf-8');
-  } catch (e) {}
-  if (!hasLoggedQuotaWarning) {
-    console.warn('ℹ️ Firestore daily write quota limit reached. Closed background write streams cleanly. Operational engine continues seamlessly on local disk & real-time SSE stream.');
-    hasLoggedQuotaWarning = true;
-  }
-}
-
-try {
-  const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-  if (fs.existsSync(configPath) && Date.now() >= firestoreQuotaExceededUntil) {
-    const firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    if (firebaseConfig && firebaseConfig.apiKey) {
-      const app = getApps().length === 0 
-        ? initializeApp({
-            apiKey: firebaseConfig.apiKey,
-            authDomain: firebaseConfig.authDomain,
-            projectId: firebaseConfig.projectId,
-            storageBucket: firebaseConfig.storageBucket,
-            messagingSenderId: firebaseConfig.messagingSenderId,
-            appId: firebaseConfig.appId,
-          }, 'tfw-server-app')
-        : getApp('tfw-server-app');
-
-      firestoreDb = firebaseConfig.firestoreDatabaseId 
-        ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
-        : getFirestore(app);
-
-      isFirestoreReady = true;
-      console.log('✅ Firebase Firestore initialized successfully for cloud database:', firebaseConfig.firestoreDatabaseId || '(default)');
-    }
-  }
-} catch (err) {
-  console.warn('⚠️ Firebase Firestore server initialization warning:', err);
-}
-
-async function pushToFirestore(senderId?: string) {
-  if (!firestoreDb || !memoryDb) return;
-  if (Date.now() < firestoreQuotaExceededUntil) {
-    return; // Active quota backoff, local disk and SSE stream handle real-time sync smoothly
-  }
-  try {
-    const docRef = doc(firestoreDb, 'tfw_data', 'app_state');
-    // Sanitize any undefined values before saving to Firestore
-    const cleanDb = JSON.parse(JSON.stringify(memoryDb));
-    const finalSenderId = senderId || lastFirestoreSenderId || null;
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Firestore write timeout after 3000ms')), 3000)
-    );
-    await Promise.race([
-      setDoc(docRef, {
-        ...cleanDb,
-        _lastSenderId: finalSenderId,
-        _cloudSavedAt: new Date().toISOString()
-      }),
-      timeoutPromise
-    ]);
-    hasLoggedQuotaWarning = false;
-  } catch (err: any) {
-    const msg = err?.message || String(err);
-    if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('Quota limit exceeded') || msg.includes('quota') || msg.includes('timeout') || err?.code === 'resource-exhausted' || err?.code === 8) {
-      persistQuotaBlock(24 * 60 * 60 * 1000); // 24h backoff until daily quota reset
-    } else {
-      console.warn('⚠️ Firestore sync note:', msg);
-    }
-  }
-}
-
-function scheduleFirestorePush(senderId?: string, immediate: boolean = false) {
-  if (!isFirestoreReady) return;
-  if (Date.now() < firestoreQuotaExceededUntil) return;
-  if (senderId) lastFirestoreSenderId = senderId;
-  if (firestoreSyncTimeout) clearTimeout(firestoreSyncTimeout);
-  
-  if (immediate) {
-    firestoreSyncTimeout = null;
-    pushToFirestore(lastFirestoreSenderId || undefined);
-    return;
-  }
-
-  // Debounce writes by 1.5s to ensure permanent persistence quickly while protecting quota
-  firestoreSyncTimeout = setTimeout(() => {
-    firestoreSyncTimeout = null;
-    pushToFirestore(lastFirestoreSenderId || undefined);
-  }, 1500);
-}
-
-let firestoreUnsubscribe: (() => void) | null = null;
-
 // Set of processed WhatsApp message IDs to prevent duplicate tickets
 const processedWhatsAppMessageIds = new Set<string>();
 
@@ -355,151 +222,6 @@ function cleanupDeletedTicket(
   return { deletedCount, deletedIds };
 }
 
-function startFirestoreRealtimeListener() {
-  if (!firestoreDb || !isFirestoreReady) return;
-  if (Date.now() < firestoreQuotaExceededUntil) return;
-  if (firestoreUnsubscribe) {
-    try { firestoreUnsubscribe(); } catch (e) {}
-    firestoreUnsubscribe = null;
-  }
-  try {
-    const docRef = doc(firestoreDb, 'tfw_data', 'app_state');
-    firestoreUnsubscribe = onSnapshot(docRef, (docSnap) => {
-      if (!docSnap.exists()) return;
-      const cloudData = docSnap.data();
-      if (!cloudData || (!cloudData.data && !cloudData.config)) return;
-
-      // Ignore if update was authored by this server instance's own push
-      if (cloudData._lastSenderId && cloudData._lastSenderId === 'server-instance') return;
-      if (cloudData.version && memoryDb?.version && cloudData.version < memoryDb.version) return;
-
-      if (!memoryDb) memoryDb = getInitialDatabase();
-      let changed = false;
-
-      // 1. Sync config & active operational date & merge deleted ticket trackers
-      if (cloudData.config) {
-        if (cloudData.config.appConfig) {
-          memoryDb.config.appConfig = {
-            ...(memoryDb.config.appConfig || {}),
-            ...cloudData.config.appConfig
-          };
-          changed = true;
-        }
-        if (Array.isArray(cloudData.config.deletedTicketIds)) {
-          if (!Array.isArray(memoryDb.config.deletedTicketIds)) memoryDb.config.deletedTicketIds = [];
-          for (const dId of cloudData.config.deletedTicketIds) {
-            if (!memoryDb.config.deletedTicketIds.includes(dId)) {
-              memoryDb.config.deletedTicketIds.push(dId);
-              cleanupDeletedTicket(memoryDb, dId);
-            }
-          }
-        }
-        if (Array.isArray(cloudData.config.deletedWhatsAppMessageIds)) {
-          if (!Array.isArray(memoryDb.config.deletedWhatsAppMessageIds)) memoryDb.config.deletedWhatsAppMessageIds = [];
-          for (const mId of cloudData.config.deletedWhatsAppMessageIds) {
-            if (!memoryDb.config.deletedWhatsAppMessageIds.includes(mId)) {
-              memoryDb.config.deletedWhatsAppMessageIds.push(mId);
-              markWhatsAppMessageProcessed(mId);
-            }
-          }
-        }
-      }
-
-      // 2. Safe merge for maintenance tickets
-      if (cloudData.data?.maintenanceTickets) {
-        if (!memoryDb.data.maintenanceTickets) memoryDb.data.maintenanceTickets = {};
-        const statusRank: Record<string, number> = { 'solved': 3, 'in-progress': 2, 'reported': 1 };
-
-        for (const [dKey, cloudDay] of Object.entries(cloudData.data.maintenanceTickets as Record<string, any>)) {
-          if (!cloudDay || typeof cloudDay !== 'object') continue;
-          if (!memoryDb.data.maintenanceTickets[dKey]) {
-            const safeDay: Record<string, any> = {};
-            for (const [tId, cTicketRaw] of Object.entries(cloudDay)) {
-              const cTicket = cTicketRaw as any;
-              if (isTicketDeleted(memoryDb, tId, cTicket?.whatsappMessageId, cTicket?.rideId, cTicket?.problem)) {
-                continue;
-              }
-              safeDay[tId] = cTicket;
-            }
-            if (Object.keys(safeDay).length > 0) {
-              memoryDb.data.maintenanceTickets[dKey] = safeDay;
-              changed = true;
-            }
-          } else {
-            for (const [tId, cTicketRaw] of Object.entries(cloudDay)) {
-              const cTicket = cTicketRaw as any;
-              if (isTicketDeleted(memoryDb, tId, cTicket?.whatsappMessageId, cTicket?.rideId, cTicket?.problem)) {
-                if (memoryDb.data.maintenanceTickets[dKey]?.[tId]) {
-                  delete memoryDb.data.maintenanceTickets[dKey][tId];
-                  changed = true;
-                }
-                continue;
-              }
-              const localTicket = memoryDb.data.maintenanceTickets[dKey][tId];
-              if (!localTicket) {
-                memoryDb.data.maintenanceTickets[dKey][tId] = cTicket;
-                changed = true;
-              } else {
-                const lRank = statusRank[localTicket.status] || 0;
-                const cRank = statusRank[cTicket?.status] || 0;
-                if (cRank > lRank || (cRank === lRank && JSON.stringify(cTicket) !== JSON.stringify(localTicket))) {
-                  memoryDb.data.maintenanceTickets[dKey][tId] = {
-                    ...localTicket,
-                    ...cTicket,
-                    status: cTicket.status,
-                    assignedToId: cTicket.assignedToId ?? localTicket.assignedToId,
-                    assignedToName: cTicket.assignedToName ?? localTicket.assignedToName,
-                    inProgressAt: cTicket.inProgressAt ?? localTicket.inProgressAt,
-                    helperIds: cTicket.helperIds ?? localTicket.helperIds,
-                    helperNames: cTicket.helperNames ?? localTicket.helperNames,
-                    resolutionNotes: (cTicket.resolutionNotes && cTicket.resolutionNotes.trim()) || localTicket.resolutionNotes || '',
-                    solutionImageUrl: cTicket.solutionImageUrl || localTicket.solutionImageUrl,
-                    solvedAt: cTicket.solvedAt || localTicket.solvedAt
-                  };
-                  changed = true;
-                }
-              }
-            }
-          }
-        }
-      }
-
-      // 3. Other real-time collections (counts, sales, assignments)
-      const dataCollections = ['dailyCounts', 'ticketSalesData', 'operatorAssignments', 'ticketSalesAssignments', 'attendance', 'packageSales', 'cxComplaints'];
-      dataCollections.forEach(col => {
-        if (cloudData.data?.[col]) {
-          if (!memoryDb.data[col]) memoryDb.data[col] = {};
-          memoryDb.data[col] = { ...memoryDb.data[col], ...cloudData.data[col] };
-          changed = true;
-        }
-      });
-
-      if (changed) {
-        memoryDb.version = Math.max((memoryDb.version || 0) + 1, cloudData.version || 1);
-        memoryDb.lastUpdated = new Date().toISOString();
-        try {
-          const serialized = JSON.stringify(memoryDb, null, 2);
-          fs.writeFileSync(DB_FILE, serialized, 'utf-8');
-        } catch (e) {}
-        // Instantly push to all connected desktop and mobile devices via SSE
-        broadcastMutation({
-          type: 'sync',
-          activeDate: cloudData.config?.appConfig?.activeOperationalDate,
-          version: memoryDb.version,
-          senderId: cloudData._lastSenderId
-        });
-      }
-    }, (err: any) => {
-      const msg = err?.message || String(err);
-      if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
-        persistQuotaBlock();
-      }
-    });
-  } catch (err) {
-    console.warn('⚠️ Server Firestore realtime listener error:', err);
-  }
-}
-
 function normalizeAppConfigAndRoles(targetDb: any): boolean {
   if (!targetDb || typeof targetDb !== 'object') return false;
   let changed = false;
@@ -647,132 +369,6 @@ function normalizeAppConfigAndRoles(targetDb: any): boolean {
   return changed;
 }
 
-// Load persisted data from Firestore on cold boot
-async function syncFromFirestoreOnStartup(): Promise<boolean> {
-  if (!firestoreDb || Date.now() < firestoreQuotaExceededUntil) return false;
-  try {
-    console.log('🔄 Checking Firestore for saved park data...');
-    const docRef = doc(firestoreDb, 'tfw_data', 'app_state');
-    // Guard with 3.5s timeout so cold container boot never hangs on remote connections
-    const docSnap: any = await Promise.race([
-      getDoc(docRef),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Firestore cold boot query timeout')), 3500))
-    ]);
-
-    if (docSnap.exists()) {
-      const cloudData = docSnap.data();
-      if (cloudData && (cloudData.data || cloudData.config)) {
-        console.log(`✅ Loaded persistent park data from Firestore (version ${cloudData.version || 1})`);
-        
-        const memoryPackages = memoryDb?.config?.packages;
-        const cloudPackages = cloudData.config?.packages;
-        const isCloudMock = Array.isArray(cloudPackages) && cloudPackages.some((p: any) => p.id === 'pkg-1' || p.name === 'Single Entry');
-        let finalPackages = cloudPackages;
-        if (!finalPackages || finalPackages.length === 0 || isCloudMock) {
-          if (Array.isArray(memoryPackages) && memoryPackages.length > 0 && !memoryPackages.some((p: any) => p.id === 'pkg-1')) {
-            finalPackages = memoryPackages;
-          } else {
-            finalPackages = DEFAULT_PACKAGES;
-          }
-        }
-
-        memoryDb = {
-          version: Math.max(cloudData.version || 1, memoryDb?.version || 1),
-          lastUpdated: cloudData.lastUpdated || new Date().toISOString(),
-          config: (memoryDb?.version && cloudData?.version && memoryDb.version >= cloudData.version)
-            ? { ...(cloudData.config || {}), ...(memoryDb?.config || {}), packages: finalPackages }
-            : { ...(memoryDb?.config || {}), ...(cloudData.config || {}), packages: finalPackages },
-          data: (() => {
-            const merged: Record<string, any> = { ...(cloudData.data || {}) };
-            if (memoryDb?.data && typeof memoryDb.data === 'object') {
-              Object.keys(memoryDb.data).forEach(key => {
-                if (key === 'maintenanceTickets') {
-                  const cloudMaint = cloudData.data?.maintenanceTickets || {};
-                  const localMaint = memoryDb.data.maintenanceTickets || {};
-                  const mergedMaint: Record<string, any> = {};
-                  const statusRank: Record<string, number> = { 'solved': 3, 'in-progress': 2, 'reported': 1 };
-
-                  // 1. Filter cloud maintenance tickets against deleted list
-                  for (const [dKey, dayMap] of Object.entries(cloudMaint as Record<string, any>)) {
-                    if (!dayMap || typeof dayMap !== 'object') continue;
-                    mergedMaint[dKey] = {};
-                    for (const [tId, cTicket] of Object.entries(dayMap as Record<string, any>)) {
-                      if (!isTicketDeleted(memoryDb, tId, cTicket?.whatsappMessageId, cTicket?.rideId, cTicket?.problem)) {
-                        mergedMaint[dKey][tId] = cTicket;
-                      }
-                    }
-                  }
-
-                  // 2. Safe merge with local maintenance tickets
-                  Object.keys(localMaint).forEach(dKey => {
-                    if (!mergedMaint[dKey]) {
-                      mergedMaint[dKey] = {};
-                    }
-                    const dayTickets: Record<string, any> = mergedMaint[dKey];
-                    for (const [tId, lTicket] of Object.entries(localMaint[dKey] as Record<string, any>)) {
-                      if (isTicketDeleted(memoryDb, tId, lTicket?.whatsappMessageId, lTicket?.rideId, lTicket?.problem)) {
-                        continue;
-                      }
-                      const cTicket = dayTickets[tId];
-                      if (!cTicket) {
-                        dayTickets[tId] = lTicket;
-                      } else {
-                        const lRank = statusRank[lTicket.status] || 0;
-                        const cRank = statusRank[cTicket.status] || 0;
-                        if (lRank >= cRank) {
-                          dayTickets[tId] = {
-                            ...cTicket,
-                            ...lTicket,
-                            resolutionNotes: (lTicket.resolutionNotes && lTicket.resolutionNotes.trim()) || cTicket.resolutionNotes || '',
-                            solutionImageUrl: lTicket.solutionImageUrl || cTicket.solutionImageUrl,
-                            solvedAt: lTicket.solvedAt || cTicket.solvedAt
-                          };
-                        }
-                      }
-                    }
-                  });
-                  merged['maintenanceTickets'] = mergedMaint;
-                } else if (merged[key] && typeof merged[key] === 'object' && typeof memoryDb.data[key] === 'object') {
-                  merged[key] = { ...merged[key], ...memoryDb.data[key] };
-                } else {
-                  merged[key] = memoryDb.data[key];
-                }
-              });
-            }
-            return merged;
-          })()
-        };
-
-        const healed = normalizeAppConfigAndRoles(memoryDb);
-
-        // Write to local disk cache immediately
-        try {
-          const serialized = JSON.stringify(memoryDb, null, 2);
-          fs.writeFileSync(DB_FILE, serialized, 'utf-8');
-          fs.writeFileSync(`${DB_FILE}.backup`, serialized, 'utf-8');
-        } catch (e) {
-          // ignore
-        }
-
-        if (healed && Date.now() >= firestoreQuotaExceededUntil) {
-          scheduleFirestorePush('system-branding-migration');
-        }
-        return true;
-      }
-    } else {
-      console.log('ℹ️ No existing Firestore document found. Will save upon first update.');
-    }
-  } catch (err: any) {
-    const msg = err?.message || String(err);
-    if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('Quota limit exceeded') || msg.includes('quota') || err?.code === 'resource-exhausted' || err?.code === 8) {
-      persistQuotaBlock(24 * 60 * 60 * 1000);
-    } else {
-      console.warn('⚠️ Note during Firestore startup sync:', msg);
-    }
-  }
-  return false;
-}
-
 // Initial Database Structure
 function getInitialDatabase() {
   return {
@@ -827,6 +423,18 @@ let clientCounter = 0;
 function loadDatabase(): any {
   if (memoryDb) return memoryDb;
   try {
+    // 1. Prioritize offline SQLite Database
+    try {
+      const sqliteState = loadFromSqlite();
+      if (sqliteState && sqliteState.config && sqliteState.data && Object.keys(sqliteState.config.rides || {}).length > 0) {
+        console.log(`⚡ Loaded database state from offline SQLite database (version: ${sqliteState.version}, rides: ${Object.keys(sqliteState.config.rides || {}).length})`);
+        memoryDb = sqliteState;
+        return memoryDb;
+      }
+    } catch (sqliteErr) {
+      console.warn('SQLite initial load attempt:', sqliteErr);
+    }
+
     let targetFileToRead = DB_FILE;
     if (!fs.existsSync(DB_FILE) && fs.existsSync(`${DB_FILE}.backup`)) {
       targetFileToRead = `${DB_FILE}.backup`;
@@ -1019,16 +627,12 @@ function saveDatabaseToDisk(mutation?: ServerMutationEvent) {
     console.error('Failed to write database to disk safely:', e);
   }
 
-  // Push to permanent Firebase Firestore cloud storage
-  const isHighPriority = Boolean(
-    mutation?.path?.includes('maintenanceTickets') ||
-    mutation?.path?.includes('ticketSales') || 
-    mutation?.path?.includes('packageSales') ||
-    (mutation?.updates && Object.keys(mutation.updates).some(k => 
-      k.includes('maintenanceTickets') || k.includes('ticketSales') || k.includes('packageSales')
-    ))
-  );
-  scheduleFirestorePush(mutation?.senderId, isHighPriority);
+  // Synchronous atomic write to SQLite database
+  try {
+    saveToSqlite(memoryDb);
+  } catch (sqlErr) {
+    console.error('Failed to write database to SQLite:', sqlErr);
+  }
 
   // Broadcast delta change via SSE to all connected clients
   broadcastMutation(mutation || { type: 'sync' });
@@ -1210,52 +814,34 @@ async function startServer() {
     next();
   });
 
-  // 1. Load initial memory & local cache
+  // 1. Load initial memory & local cache from SQLite
   loadDatabase();
-
-  // 2. Synchronize with Firestore cloud database on boot and start realtime cloud listener
-  await syncFromFirestoreOnStartup();
-  startFirestoreRealtimeListener();
 
   // --- API Routes ---
   app.get('/api/health', (req, res) => {
-    if (firestoreQuotaExceededUntil <= Date.now() && fs.existsSync(QUOTA_FILE)) {
-      try {
-        const qData = JSON.parse(fs.readFileSync(QUOTA_FILE, 'utf-8'));
-        if (qData && qData.blockedUntil && Number(qData.blockedUntil) > Date.now()) {
-          firestoreQuotaExceededUntil = Number(qData.blockedUntil);
-        }
-      } catch (e) {}
-    }
-    const isQuotaBlocked = Date.now() < firestoreQuotaExceededUntil;
     res.json({
       status: 'ok',
       dbVersion: memoryDb?.version || 1,
       dbLastUpdated: memoryDb?.lastUpdated || '',
       activeOperationalDate: memoryDb?.config?.appConfig?.activeOperationalDate || '',
       clients: sseClients.length,
-      firestoreConnected: isFirestoreReady && !isQuotaBlocked,
-      firestoreQuotaExceeded: isQuotaBlocked,
-      firestoreQuotaBlockedUntil: isQuotaBlocked ? firestoreQuotaExceededUntil : 0,
+      database: 'sqlite',
+      sqliteConnected: true,
       time: new Date().toISOString()
     });
   });
 
-  // Manual trigger for Cloud Sync (Firestore)
+  // Manual trigger for SQLite persistence
   app.post('/api/db/cloud-sync', async (req, res) => {
     try {
-      if (Date.now() < firestoreQuotaExceededUntil || !isFirestoreReady) {
-        return res.json({ 
-          success: true, 
-          quotaExceeded: true, 
-          message: 'Local database is fully persistent on disk. Firestore daily cloud write quota is currently resetting.',
-          version: memoryDb?.version 
-        });
-      }
-      await pushToFirestore();
-      res.json({ success: true, message: 'Cloud database synced to Firestore successfully.', version: memoryDb?.version });
+      saveToSqlite(memoryDb);
+      res.json({ 
+        success: true, 
+        message: 'Database persisted to local SQLite database successfully.', 
+        version: memoryDb?.version 
+      });
     } catch (err) {
-      res.status(500).json({ error: 'Failed to sync to Firestore' });
+      res.status(500).json({ error: 'Failed to persist to SQLite' });
     }
   });
 
@@ -1318,9 +904,6 @@ async function startServer() {
       if (maintenanceViewScope) memoryDb.config.appConfig.activeMaintenanceViewScope = maintenanceViewScope;
 
       saveDatabaseToDisk({ type: 'sync', activeDate, activeView, senderId, force: true });
-      if (isFirestoreReady && Date.now() >= firestoreQuotaExceededUntil) {
-        scheduleFirestorePush(senderId, false);
-      }
       // Broadcast current operators explicitly so all connected clients update associates immediately
       broadcastMutation({
         type: 'set',
@@ -3077,6 +2660,36 @@ async function startServer() {
     };
     saveDatabaseToDisk({ type: 'sync' });
     res.json({ success: true, message: 'Database imported successfully.' });
+  });
+
+  // SQLite Stats & Diagnostics Endpoint
+  app.get('/api/db/sqlite-stats', (req, res) => {
+    try {
+      const stats = getSqliteStats();
+      res.json({
+        engine: 'sqlite3 (node:sqlite / WAL mode)',
+        active: Boolean(stats),
+        stats: stats || 'No database initialized yet'
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Trigger explicit migration to SQLite
+  app.post('/api/db/sqlite-migrate', (req, res) => {
+    try {
+      const current = loadDatabase();
+      saveToSqlite(current);
+      const stats = getSqliteStats();
+      res.json({
+        success: true,
+        message: 'Successfully migrated current state to SQLite database.',
+        stats
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Server-Sent Events (SSE) for Real-Time synchronization with Keepalive Heartbeat

@@ -3619,7 +3619,7 @@ export const SalesOfficerDashboard = ({
                     <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                     Saved to database permanently!
                   </span>
-                  <span className="text-[11px] text-emerald-400/80">Synced live with Firestore & local disk</span>
+                  <span className="text-[11px] text-emerald-400/80">Synced live with local SQLite database</span>
                 </div>
               )}
 

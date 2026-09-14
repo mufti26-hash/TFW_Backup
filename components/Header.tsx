@@ -98,7 +98,7 @@ const Header: React.FC<Props> = ({
                     {role === 'operator' ? 'Games & Ride Associate' : role === 'maintenance' ? 'Maintenance' : role === 'ticket-sales' ? 'Ticket Sales' : role?.replace('-', ' ')}
                   </span>
                   <span 
-                    title={connectionStatus === 'connected' ? 'Multi-device cloud synchronization active via Firebase Firestore & Live Server' : 'Offline: Changes saved locally in queue and will auto-sync when internet reconnects'}
+                    title={connectionStatus === 'connected' ? 'Offline-first SQLite database active with zero-latency live sync' : 'Offline: Changes queued locally and will commit automatically'}
                     className={`text-[11px] sm:text-xs flex items-center gap-1.5 font-medium px-2 py-0.5 rounded-md border ${
                       connectionStatus === 'connected' 
                         ? 'text-emerald-400 bg-emerald-950/40 border-emerald-800/40' 

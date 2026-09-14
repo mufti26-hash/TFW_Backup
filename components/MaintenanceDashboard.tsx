@@ -3503,7 +3503,7 @@ export const MaintenanceDashboard: React.FC<Props> = ({
                     </div>
                     <ul className="text-xs text-emerald-200/90 space-y-1 pl-1">
                       <li>• <strong>Strictly Isolated:</strong> Incoming WhatsApp messages ONLY create entries in <code className="bg-emerald-900/50 px-1 py-0.5 rounded text-emerald-200">data/maintenanceTickets</code>. They NEVER touch counter sales, revenue, rosters, or attendance.</li>
-                      <li>• <strong>No Quota Billing:</strong> Webhooks run on our internal server engine and synchronize smoothly without draining Firestore write operations.</li>
+                      <li>• <strong>No Quota or Cloud Billing:</strong> Webhooks run on the local offline server engine and persist directly to SQLite with zero third-party limits or costs.</li>
                       <li>• <strong>Auto-Ride Recognition:</strong> Mentions of rides (e.g. &ldquo;Laser Maze&rdquo;, &ldquo;Paintball&rdquo;, &ldquo;VR Tank&rdquo;) automatically link to the correct attraction.</li>
                     </ul>
                   </div>

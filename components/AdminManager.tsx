@@ -2696,11 +2696,11 @@ export const AdminManager: React.FC<Props> = ({
             </div>
           )}
 
-          {/* --- TAB: CLOUD DATABASE & PERSISTENCE --- */}
+          {/* --- TAB: SQLITE DATABASE & PERSISTENCE --- */}
           {activeTab === 'database' && (
             <div className="space-y-6 animate-fade-in-up">
               
-              {/* Cloud Persistence Banner */}
+              {/* SQLite Persistence Banner */}
               <div className="bg-gradient-to-r from-gray-800 via-cyan-950/30 to-blue-950/30 p-6 rounded-2xl border border-cyan-500/30 space-y-4">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                   <div className="flex items-center gap-3">
@@ -2709,14 +2709,14 @@ export const AdminManager: React.FC<Props> = ({
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <h3 className="text-lg font-bold text-white">Permanent Firebase Firestore Cloud Persistence</h3>
+                        <h3 className="text-lg font-bold text-white">Permanent Local SQLite Database Persistence</h3>
                         <span className="bg-emerald-950/80 text-emerald-300 border border-emerald-700/80 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
                           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                          CLOUD ACTIVE
+                          SQLITE ACTIVE (OFFLINE)
                         </span>
                       </div>
                       <p className="text-xs text-gray-300 mt-0.5">
-                        Your system state, rides, staff, attendance, and shift sales are securely stored in Google Firebase Firestore and synchronized in real-time across all devices.
+                        Your system state, rides, staff, attendance, and shift sales are securely stored in a local SQLite database (WAL mode) and synchronized in real-time across all devices.
                       </p>
                     </div>
                   </div>
@@ -2728,7 +2728,7 @@ export const AdminManager: React.FC<Props> = ({
                     className="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-cyan-950/50 transition-all cursor-pointer whitespace-nowrap"
                   >
                     <RefreshCw className={`w-4 h-4 ${cloudSyncLoading ? 'animate-spin' : ''}`} />
-                    {cloudSyncLoading ? 'Syncing to Cloud...' : 'Manual Cloud Sync'}
+                    {cloudSyncLoading ? 'Saving to SQLite...' : 'Save to SQLite'}
                   </button>
                 </div>
 
@@ -3106,7 +3106,7 @@ export const AdminManager: React.FC<Props> = ({
                       <h4 className="text-sm font-bold text-white">Restore Database from JSON Backup</h4>
                     </div>
                     <p className="text-xs text-gray-400">
-                      Upload and restore a previously downloaded JSON backup file. This will update the local database and synchronize with Firestore cloud.
+                      Upload and restore a previously downloaded JSON backup file. This will update the local SQLite database and broadcast to all connected screens.
                     </p>
                   </div>
 

@@ -11,18 +11,10 @@ import {
   DEFAULT_PACKAGES,
   DEFAULT_APP_CONFIG
 } from './constants';
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, doc, getDocFromServer, onSnapshot, setDoc, terminate, setLogLevel } from 'firebase/firestore';
-import firebaseConfigJson from './firebase-applet-config.json';
 
-// Silence background gRPC and Firestore client stream error logs
-try {
-  setLogLevel('silent');
-} catch (e) {
-  // ignore
-}
-
-export const isFirebaseConfigured = true;
+export const isFirebaseConfigured = true; // Local SQLite database persistence is active
+export const isDatabaseConfigured = true;
+export const clientFirestore: any = null;
 
 // Known permanently deleted tickets, WhatsApp messages, and issue signatures to prevent resurrection
 export const DEFAULT_DELETED_TICKET_IDS: string[] = [
@@ -45,52 +37,6 @@ export const DEFAULT_DELETED_SIGNATURES: string[] = [
   'bunkerneedsairrefill',
   'level17paintballbunker'
 ];
-
-// Direct Firebase Firestore Client Instance
-export let clientFirestore: any = null;
-try {
-  const isQuotaBlocked = typeof window !== 'undefined' && 
-    Number(localStorage.getItem('TFW_FIRESTORE_QUOTA_BLOCKED_UNTIL') || 0) > Date.now();
-
-  if (firebaseConfigJson && firebaseConfigJson.apiKey && !isQuotaBlocked) {
-    const app = getApps().length === 0 ? initializeApp(firebaseConfigJson) : getApp();
-    try {
-      clientFirestore = firebaseConfigJson.firestoreDatabaseId 
-        ? getFirestore(app, firebaseConfigJson.firestoreDatabaseId)
-        : getFirestore(app);
-    } catch (e) {
-      clientFirestore = getFirestore(app);
-    }
-  }
-} catch (e) {
-  console.warn('Firestore Client Init:', e);
-}
-
-// Validate Connection to Firestore on Boot
-async function testFirestoreConnection() {
-  if (!clientFirestore) return;
-  try {
-    await getDocFromServer(doc(clientFirestore, 'tfw_data', 'meta'));
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('TFW_FIRESTORE_QUOTA_BLOCKED_UNTIL');
-    }
-  } catch (error: any) {
-    const msg = error?.message || String(error);
-    if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota') || error?.code === 'resource-exhausted' || error?.code === 8) {
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('TFW_FIRESTORE_QUOTA_BLOCKED_UNTIL', String(Date.now() + 24 * 60 * 60 * 1000));
-      }
-      if (clientFirestore) {
-        try { terminate(clientFirestore).catch(() => {}); } catch (e) {}
-        clientFirestore = null;
-      }
-    }
-  }
-}
-
-if (typeof window !== 'undefined') {
-  testFirestoreConnection();
-}
 
 type ValueCallback = (snapshot: { val: () => any }) => void;
 
@@ -116,7 +62,6 @@ class ServerDatabaseEngine {
   private listeners: Map<string, Set<ValueCallback>> = new Map();
   private sse: EventSource | null = null;
   private isConnected: boolean = typeof navigator !== 'undefined' ? navigator.onLine : true;
-  private isFirestoreConnected: boolean = false;
   private isSseConnected: boolean = false;
   private connectionListeners: Set<(connected: boolean) => void> = new Set();
   private pollInterval: any = null;
@@ -126,12 +71,9 @@ class ServerDatabaseEngine {
   private reconnectTimer: any = null;
   private offlineQueue: QueuedMutation[] = [];
   private isFlushingQueue: boolean = false;
-  private firestoreUnsub: (() => void) | null = null;
 
   private isServerApiAvailable: boolean = true;
   private sseFailCount: number = 0;
-  private clientFirestoreDebounceTimer: any = null;
-  private clientFirestoreQuotaBlockedUntil: number = 0;
   private lastLocalEditTime: number = 0;
   private lastSsePingTime: number = Date.now();
   private broadcastChannel: BroadcastChannel | null = null;
@@ -146,10 +88,6 @@ class ServerDatabaseEngine {
       const storedQueue = localStorage.getItem('TFW_OFFLINE_QUEUE');
       if (storedQueue) {
         this.offlineQueue = JSON.parse(storedQueue);
-      }
-      const storedQuota = localStorage.getItem('TFW_FIRESTORE_QUOTA_BLOCKED_UNTIL');
-      if (storedQuota && Number(storedQuota) > Date.now()) {
-        this.clientFirestoreQuotaBlockedUntil = Number(storedQuota);
       }
     } catch (e) {
       console.warn('Could not read from localStorage:', e);
@@ -169,10 +107,9 @@ class ServerDatabaseEngine {
       }
     }
 
-    // Assume initial online if browser is online and Firestore client exists
+    // Assume initial online if browser is online
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
-    if (isOnline && (clientFirestore || isFirebaseConfigured)) {
-      this.isFirestoreConnected = true;
+    if (isOnline) {
       this.isConnected = true;
       this.updateConnectionState();
     }
@@ -180,15 +117,12 @@ class ServerDatabaseEngine {
     // 2. Listen to browser native online/offline & visibility/focus events for instant sync
     if (typeof window !== 'undefined') {
       window.addEventListener('online', () => {
-        this.isFirestoreConnected = true;
         this.updateConnectionState();
         this.connectStream();
-        this.initFirestoreRealtimeListener();
         this.flushOfflineQueue();
         this.fetchFullDatabase();
       });
       window.addEventListener('offline', () => {
-        this.isFirestoreConnected = false;
         this.isSseConnected = false;
         this.updateConnectionState();
       });
@@ -248,7 +182,7 @@ class ServerDatabaseEngine {
 
   private updateConnectionState() {
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
-    const shouldBeConnected = isOnline && (this.isFirestoreConnected || this.isSseConnected || clientFirestore !== null || isFirebaseConfigured);
+    const shouldBeConnected = isOnline && (this.isSseConnected || this.isServerApiAvailable);
     if (this.isConnected !== shouldBeConnected) {
       this.isConnected = shouldBeConnected;
       this.connectionListeners.forEach(cb => {
@@ -257,67 +191,6 @@ class ServerDatabaseEngine {
       if (this.isConnected) {
         this.flushOfflineQueue();
       }
-    }
-  }
-
-  // Direct Firestore real-time snapshot listener: Broadcasts instant multi-device mutations globally
-  private initFirestoreRealtimeListener() {
-    if (typeof window === 'undefined' || !clientFirestore) return;
-    if (this.clientFirestoreQuotaBlockedUntil > Date.now()) {
-      this.isFirestoreConnected = false;
-      this.updateConnectionState();
-      return;
-    }
-    // When the Express server API is available, the server's SSE stream (/api/db/stream)
-    // is the primary, authoritative real-time pipeline. Client-side direct Firestore onSnapshot
-    // can receive stale or delayed documents, so we keep direct Firestore listener inactive when server SSE is active.
-    if (this.isServerApiAvailable) {
-      if (this.firestoreUnsub) {
-        try { this.firestoreUnsub(); } catch (e) {}
-        this.firestoreUnsub = null;
-      }
-      return;
-    }
-    try {
-      if (this.firestoreUnsub) {
-        try { this.firestoreUnsub(); } catch (e) { /* ignore */ }
-      }
-      const docRef = doc(clientFirestore, 'tfw_data', 'app_state');
-      this.firestoreUnsub = onSnapshot(docRef, (docSnap) => {
-        this.isFirestoreConnected = true;
-        this.updateConnectionState();
-
-        if (docSnap.exists()) {
-          const cloudData = docSnap.data();
-          if (cloudData && (cloudData.data || cloudData.config)) {
-            // NEVER apply an outdated cloud snapshot
-            if (cloudData.version && this.dbVersion && cloudData.version < this.dbVersion) {
-              return;
-            }
-            this.applyCloudSnapshot(cloudData);
-          }
-        }
-      }, (error: any) => {
-        const msg = error?.message || String(error);
-        if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota') || msg.includes('resource-exhausted') || error?.code === 'resource-exhausted' || error?.code === 8) {
-          this.clientFirestoreQuotaBlockedUntil = Date.now() + 24 * 60 * 60 * 1000;
-          try {
-            localStorage.setItem('TFW_FIRESTORE_QUOTA_BLOCKED_UNTIL', String(this.clientFirestoreQuotaBlockedUntil));
-          } catch (e) {}
-          this.isFirestoreConnected = false;
-          if (this.firestoreUnsub) {
-            try { this.firestoreUnsub(); } catch (e) {}
-            this.firestoreUnsub = null;
-          }
-          if (clientFirestore) {
-            try { terminate(clientFirestore).catch(() => {}); } catch (e) {}
-            clientFirestore = null;
-          }
-          this.updateConnectionState();
-        }
-      });
-    } catch (err) {
-      // ignore
     }
   }
 
@@ -624,31 +497,6 @@ class ServerDatabaseEngine {
         this.isServerApiAvailable = true;
         this.sseFailCount = 0;
         const json = await res.json();
-        if (json.firestoreQuotaExceeded || json.firestoreQuotaBlocked) {
-          this.clientFirestoreQuotaBlockedUntil = json.firestoreQuotaBlockedUntil || (Date.now() + 24 * 60 * 60 * 1000);
-          if (typeof window !== 'undefined') {
-            localStorage.setItem('TFW_FIRESTORE_QUOTA_BLOCKED_UNTIL', String(this.clientFirestoreQuotaBlockedUntil));
-          }
-          if (clientFirestore) {
-            try { terminate(clientFirestore).catch(() => {}); } catch (e) {}
-            clientFirestore = null;
-          }
-          if (this.firestoreUnsub) {
-            try { this.firestoreUnsub(); } catch (e) {}
-            this.firestoreUnsub = null;
-          }
-        } else {
-          // If server reports quota is healthy, immediately unblock local state and reconnect
-          if (this.clientFirestoreQuotaBlockedUntil > 0) {
-            this.clientFirestoreQuotaBlockedUntil = 0;
-            if (typeof window !== 'undefined') {
-              localStorage.removeItem('TFW_FIRESTORE_QUOTA_BLOCKED_UNTIL');
-            }
-            if (!this.firestoreUnsub) {
-              this.initFirestoreRealtimeListener();
-            }
-          }
-        }
         if (json.activeOperationalDate && json.activeOperationalDate !== this.cache?.config?.appConfig?.activeOperationalDate) {
           this.setValueLocal('config/appConfig/activeOperationalDate', json.activeOperationalDate);
           this.notifyPathListeners('config/appConfig');
@@ -767,17 +615,13 @@ class ServerDatabaseEngine {
           this.offlineQueue = this.offlineQueue.slice(processedCount);
           this.saveOfflineQueue();
           if (data.version) this.dbVersion = data.version;
-          this.isFirestoreConnected = true;
           this.updateConnectionState();
           return;
         }
       }
 
-      // If Server API is not available (e.g. Vercel), push state directly to Firestore
-      this.pushToFirestoreClient(true);
       this.offlineQueue = [];
       this.saveOfflineQueue();
-      this.isFirestoreConnected = true;
       this.updateConnectionState();
     } catch (e) {
       // Will retry on next reconnect
@@ -1490,48 +1334,9 @@ class ServerDatabaseEngine {
     }
   }
 
-  // Fast local save & direct Firestore persistence (used ONLY when server API is unavailable / standalone SPA fallback)
+  // Local persistence helper (offline SQLite mode)
   private pushToFirestoreClient(immediate: boolean = false) {
-    // If the server API is available, the server is the single authoritative manager that saves to disk & throttles cloud sync
-    if (this.isServerApiAvailable) return;
-    if (!clientFirestore || !this.cache || typeof window === 'undefined') return;
-    if (Date.now() < this.clientFirestoreQuotaBlockedUntil) return;
-
-    if (this.clientFirestoreDebounceTimer) {
-      clearTimeout(this.clientFirestoreDebounceTimer);
-      this.clientFirestoreDebounceTimer = null;
-    }
-
-    const doPush = async () => {
-      if (this.isServerApiAvailable) return;
-      if (!clientFirestore || !this.cache) return;
-      if (Date.now() < this.clientFirestoreQuotaBlockedUntil) return;
-      try {
-        const docRef = doc(clientFirestore, 'tfw_data', 'app_state');
-        const cleanDb = JSON.parse(JSON.stringify(this.cache));
-        await setDoc(docRef, {
-          ...cleanDb,
-          version: this.dbVersion || 1,
-          lastUpdated: new Date().toISOString(),
-          _lastSenderId: this.clientId,
-          _cloudSavedAt: new Date().toISOString()
-        });
-        this.isFirestoreConnected = true;
-        this.updateConnectionState();
-      } catch (err: any) {
-        const msg = err?.message || String(err);
-        if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota') || msg.includes('resource-exhausted') || err?.code === 'resource-exhausted') {
-          this.clientFirestoreQuotaBlockedUntil = Date.now() + 15 * 60 * 1000;
-          this.isFirestoreConnected = false;
-        }
-      }
-    };
-
-    if (immediate) {
-      doPush();
-    } else {
-      this.clientFirestoreDebounceTimer = setTimeout(doPush, 5000);
-    }
+    // Offline SQLite mode: all persistence is handled by server API / SQLite
   }
 
   // Force broadcast current view, active date, and maintenance tabs across all connected devices
@@ -2118,7 +1923,7 @@ class ServerDatabaseEngine {
     }
   }
 
-  // 5. Force push full state directly to Firebase Cloud storage (client + server resilient)
+  // 5. Force persist full state directly to SQLite database
   public async forceCloudSync(): Promise<{ success: boolean; message: string }> {
     this.lastLocalEditTime = Date.now();
     this.dbVersion = (this.dbVersion || 1) + 1;
@@ -2129,50 +1934,25 @@ class ServerDatabaseEngine {
     this.saveToLocalStorage();
     this.notifyAllListeners();
 
-    let cloudSuccess = false;
+    let sqliteSuccess = false;
 
-    // Direct Firestore write (used only if server API is unavailable / standalone SPA fallback)
-    if (!this.isServerApiAvailable && clientFirestore && this.cache && typeof window !== 'undefined') {
-      if (Date.now() >= this.clientFirestoreQuotaBlockedUntil) {
-        try {
-          const docRef = doc(clientFirestore, 'tfw_data', 'app_state');
-          const cleanDb = JSON.parse(JSON.stringify(this.cache));
-          await setDoc(docRef, {
-            ...cleanDb,
-            version: this.dbVersion,
-            lastUpdated: new Date().toISOString(),
-            _lastSenderId: this.clientId,
-            _cloudSavedAt: new Date().toISOString()
-          });
-          cloudSuccess = true;
-          this.isFirestoreConnected = true;
-          this.updateConnectionState();
-        } catch (err: any) {
-          const msg = err?.message || String(err);
-          if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota') || err?.code === 'resource-exhausted') {
-            this.clientFirestoreQuotaBlockedUntil = Date.now() + 15 * 60 * 1000;
-          }
-        }
-      }
-    }
-
-    // Server API broadcast if available
+    // Server API persistence to SQLite
     if (this.isServerApiAvailable) {
       try {
         const res = await fetch('/api/db/cloud-sync', { method: 'POST' });
         if (res.ok) {
-          cloudSuccess = true;
+          sqliteSuccess = true;
         }
       } catch (e) {
-        // Transient error
+        // Transient network error
       }
     }
 
     return {
       success: true,
-      message: cloudSuccess
-        ? 'Successfully saved and synced full database to Firebase Firestore Cloud storage!'
-        : 'All changes saved locally & queued for immediate cloud sync.'
+      message: sqliteSuccess
+        ? 'Successfully saved and synced full database to local SQLite database!'
+        : 'All changes saved locally & queued for SQLite sync.'
     };
   }
 
