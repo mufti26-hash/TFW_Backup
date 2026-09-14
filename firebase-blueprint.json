@@ -1,0 +1,28 @@
+{
+  "entities": {
+    "appData": {
+      "title": "AppData",
+      "description": "Toggi Fun World operations, rides, personnel, and counter logs",
+      "type": "object",
+      "properties": {
+        "rides": { "type": "object", "description": "Rides status and counters" },
+        "operators": { "type": "object", "description": "Ride operators list" },
+        "salesPersonnel": { "type": "object", "description": "Sales executives" },
+        "maintenancePersonnel": { "type": "object", "description": "Maintenance staff" },
+        "counters": { "type": "object", "description": "Sales counter terminals" },
+        "floors": { "type": "object", "description": "Floor details" },
+        "packages": { "type": "object", "description": "Park packages" },
+        "config": { "type": "object", "description": "Application configurations and passwords" },
+        "dateLogs": { "type": "object", "description": "Historical dates logs and operations" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp of last update" },
+        "version": { "type": "number", "description": "Database version sequence" }
+      }
+    }
+  },
+  "firestore": {
+    "/tfw_data/{docId}": {
+      "schema": "appData",
+      "description": "Central persistent store for TFW operational database"
+    }
+  }
+}

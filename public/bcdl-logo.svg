@@ -1,0 +1,209 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 230" width="100%" height="100%">
+  <!-- Clean White Canvas -->
+  <rect width="340" height="230" rx="12" fill="#FFFFFF"/>
+
+  <!-- 1. SUNBURST & RAINBOW HALO -->
+  <g id="sunburst">
+    <!-- Fan of Alternating Colored Triangular Rays -->
+    <!-- Arc centered around (108, 98), radius ~68-88 -->
+    <polygon points="34,118 20,120 30,108" fill="#E91E63"/>
+    <polygon points="30,102 16,98 28,88" fill="#D32F2F"/>
+    <polygon points="31,82 17,74 32,68" fill="#7B1FA2"/>
+    <polygon points="37,62 25,52 42,48" fill="#1D1D1B"/>
+    <polygon points="49,44 39,32 57,32" fill="#1565C0"/>
+    <polygon points="65,30 57,17 76,20" fill="#00BCD4"/>
+    <polygon points="84,20 80,5 98,12" fill="#FFEB3B"/>
+    <polygon points="106,14 107,-1 121,10" fill="#FF9800"/>
+    <polygon points="129,13 135,-2 145,12" fill="#E91E63"/>
+    <polygon points="151,16 162,3 166,19" fill="#1D1D1B"/>
+    <polygon points="171,23 184,13 182,29" fill="#FFEB3B"/>
+    <polygon points="186,33 201,26 193,42" fill="#7B1FA2"/>
+    <polygon points="198,47 214,43 203,58" fill="#1565C0"/>
+
+    <!-- Concentric Rainbow Arches -->
+    <!-- Outer Yellow Arch -->
+    <path d="M 40 114 A 68 68 0 0 1 180 82" fill="none" stroke="#FDB813" stroke-width="7" stroke-linecap="round"/>
+    <!-- Middle Red Arch -->
+    <path d="M 48 114 A 60 60 0 0 1 174 85" fill="none" stroke="#E52421" stroke-width="7" stroke-linecap="round"/>
+    <!-- Inner Purple Arch -->
+    <path d="M 56 114 A 52 52 0 0 1 168 88" fill="none" stroke="#741B8D" stroke-width="6.5" stroke-linecap="round"/>
+  </g>
+
+  <!-- 2. FLOWING GREEN WHIP / RIBBON -->
+  <path d="M 22 124 Q 58 64 120 44 T 205 60 T 290 62" fill="none" stroke="#00A651" stroke-width="2.2" stroke-linecap="round"/>
+
+  <!-- 3. TRADITIONAL HORSE CARRIAGE ("TOMTOM") -->
+  <g id="carriage">
+    <!-- Carriage Canopy & Struts -->
+    <path d="M 68 78 C 70 89, 76 98, 86 104 L 117 104 C 124 98, 127 89, 128 78 Z" fill="#111111"/>
+    <!-- Angled Top Canopy Ribs / Struts -->
+    <line x1="68" y1="78" x2="56" y2="82" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
+    <line x1="70" y1="82" x2="57" y2="89" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
+    <line x1="73" y1="87" x2="60" y2="96" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
+    <line x1="76" y1="93" x2="63" y2="103" stroke="#111111" stroke-width="2.5" stroke-linecap="round"/>
+
+    <!-- Carriage Body & Footboard -->
+    <path d="M 80 102 L 86 128 L 134 128 L 142 102 Z" fill="#111111"/>
+    <rect x="131" y="105" width="12" height="23" fill="#111111" rx="1.5"/>
+    <line x1="138" y1="128" x2="168" y2="128" stroke="#111111" stroke-width="2.2"/>
+    <!-- Shaft connection to horse -->
+    <line x1="110" y1="124" x2="208" y2="114" stroke="#111111" stroke-width="2.2" stroke-linecap="round"/>
+
+    <!-- Carriage Spoked Wheel with Red Hub -->
+    <g transform="translate(108, 128)">
+      <!-- Outer Black Tire Rim -->
+      <circle cx="0" cy="0" r="26" fill="#111111"/>
+      <!-- Crisp White Wall Ring -->
+      <circle cx="0" cy="0" r="22" fill="#FFFFFF"/>
+      <!-- Inner Thin Metal Rim -->
+      <circle cx="0" cy="0" r="17.5" fill="none" stroke="#111111" stroke-width="1.6"/>
+      <!-- Fine Radial Spokes -->
+      <line x1="-17.5" y1="0" x2="17.5" y2="0" stroke="#111111" stroke-width="1.4"/>
+      <line x1="0" y1="-17.5" x2="0" y2="17.5" stroke="#111111" stroke-width="1.4"/>
+      <line x1="-12.4" y1="-12.4" x2="12.4" y2="12.4" stroke="#111111" stroke-width="1.4"/>
+      <line x1="-12.4" y1="12.4" x2="12.4" y2="-12.4" stroke="#111111" stroke-width="1.4"/>
+      <!-- Distinctive Bright Red Center Hub -->
+      <circle cx="0" cy="0" r="9" fill="#E52421"/>
+      <circle cx="0" cy="0" r="3.2" fill="#111111"/>
+    </g>
+  </g>
+
+  <!-- 4. HORSE (Detailed Trotting Stallion Silhouette) -->
+  <g id="horse" transform="translate(148, 55)">
+    <!-- Muscular Trotting Horse Silhouette -->
+    <path d="
+      M 60 55
+      C 65 44, 72 34, 76 20
+      C 79 12, 82 8, 86 5
+      C 89 8, 89 12, 87 16
+      C 91 12, 94 10, 97 13
+      C 94 17, 91 21, 88 25
+      C 92 29, 95 33, 94 38
+      C 91 42, 86 42, 82 40
+      C 78 50, 76 63, 82 70
+      L 90 72
+      C 100 73, 107 77, 105 90
+      L 107 119
+      L 102 121
+      L 98 97
+      L 91 95
+      L 88 119
+      L 83 120
+      L 79 92
+      C 72 95, 62 95, 52 93
+      L 43 119
+      L 37 120
+      L 40 90
+      C 35 88, 31 83, 29 76
+      C 26 66, 33 56, 43 54
+      C 50 54, 56 55, 60 55
+      Z
+    " fill="#111111"/>
+
+    <!-- Tail -->
+    <path d="M 31 76 C 24 83, 20 95, 22 110 C 26 101, 29 92, 33 85 Z" fill="#111111"/>
+
+    <!-- White Harness Straps & Bridle Lines -->
+    <path d="M 86 12 L 89 27 L 93 34" fill="none" stroke="#FFFFFF" stroke-width="1.3"/>
+    <circle cx="89" cy="27" r="1" fill="#FFFFFF"/>
+    <path d="M 79 57 C 74 61, 67 63, 62 63" fill="none" stroke="#FFFFFF" stroke-width="1.4"/>
+    <path d="M 52 61 L 52 87" fill="none" stroke="#FFFFFF" stroke-width="1.4"/>
+    <path d="M 52 70 L 82 70" fill="none" stroke="#FFFFFF" stroke-width="1.4"/>
+    <!-- Reins leading to carriage -->
+    <line x1="89" y1="28" x2="20" y2="63" stroke="#111111" stroke-width="1.1"/>
+    <line x1="52" y1="70" x2="-25" y2="70" stroke="#111111" stroke-width="1.1"/>
+  </g>
+
+  <!-- 5. BASHUNDHARA PURPLE EMBLEM BOX -->
+  <g id="emblem-box" transform="translate(82, 150)">
+    <!-- Solid Vibrant Purple Box -->
+    <rect x="0" y="0" width="194" height="38" fill="#741B8D" rx="2"/>
+
+    <!-- BASHUNDHARA Text (Bold White Sans-Serif Condensed Caps) -->
+    <text 
+      x="97" 
+      y="27" 
+      text-anchor="middle" 
+      font-family="'Impact', 'Arial Black', 'Trebuchet MS', 'Arial', sans-serif" 
+      font-size="24" 
+      font-weight="900" 
+      letter-spacing="3" 
+      fill="#FFFFFF"
+    >
+      BASHUNDHARA
+    </text>
+  </g>
+
+  <!-- 6. "City" CALLIGRAPHIC RED SCRIPT OVERLAPPING EMBLEM -->
+  <g id="city-text" transform="translate(190, 160)">
+    <!-- Elegant brush cursive "City" in bright red -->
+    <!-- 'C' capital swooping under the purple box border -->
+    <path d="
+      M 7 22
+      C 4 12, 10 3, 20 2
+      C 27 2, 31 7, 30 13
+      C 28 17, 24 18, 22 16
+      C 20 14, 22 11, 24 10
+      C 25 10, 25 8, 23 8
+      C 18 7, 13 13, 12 20
+      C 11 27, 16 32, 23 31
+      C 28 30, 32 25, 34 21
+      L 36 22
+      C 34 29, 27 36, 18 36
+      C 11 36, 6 31, 7 22
+      Z
+    " fill="#E52421"/>
+
+    <!-- 'i' -->
+    <path d="
+      M 34 21
+      C 36 17, 38 15, 40 15
+      C 42 15, 43 17, 41 21
+      L 39 29
+      C 38 31, 40 32, 42 31
+      L 43 32
+      C 40 34, 37 34, 36 31
+      L 38 22
+      C 37 23, 35 25, 34 26
+      Z
+    " fill="#E52421"/>
+    <!-- Dot for 'i' -->
+    <circle cx="43" cy="11" r="2.5" fill="#E52421"/>
+
+    <!-- 't' -->
+    <path d="
+      M 47 8
+      L 51 8
+      L 50 15
+      L 56 15
+      L 55 18
+      L 49 18
+      L 46 29
+      C 44 32, 46 34, 49 32
+      L 50 34
+      C 46 36, 42 35, 43 30
+      L 47 18
+      L 44 18
+      L 45 15
+      L 48 15
+      Z
+    " fill="#E52421"/>
+
+    <!-- 'y' with long elegant cursive descender -->
+    <path d="
+      M 54 17
+      C 56 16, 59 16, 60 19
+      L 58 27
+      C 57 29, 59 30, 61 28
+      L 65 17
+      L 69 17
+      L 62 33
+      C 59 40, 55 48, 49 49
+      C 46 50, 44 48, 45 46
+      C 46 44, 48 45, 50 44
+      C 54 43, 56 38, 59 31
+      L 54 18
+      Z
+    " fill="#E52421"/>
+  </g>
+</svg>

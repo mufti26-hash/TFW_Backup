@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 400" width="100%" height="100%">
+  <!-- Background Card / Canvas -->
+  <rect width="500" height="400" rx="32" fill="#FFFFFF"/>
+  
+  <g transform="translate(45, 30)">
+    <!-- Stylized Monogram "TBG" -->
+    <g id="monogram">
+      <!-- 'T' - Bold Black Classical Serif (Solid Deep Black #111113) -->
+      <path d="
+        M 10 75
+        C 10 65, 14 58, 26 58
+        L 138 58
+        C 150 58, 154 65, 154 75
+        L 154 84
+        C 142 84, 137 77, 132 75
+        L 98 75
+        L 98 250
+        C 104 252, 110 254, 118 255
+        L 118 263
+        L 46 263
+        L 46 255
+        C 54 254, 60 252, 66 250
+        L 66 75
+        L 32 75
+        C 27 77, 22 84, 10 84
+        Z
+      " fill="#111113"/>
+
+      <!-- 'B' & 'G' - Interlocking Serif Flourish in Sleek Gray (#7C7E83) -->
+      <!-- The Upper Loop of 'B' -->
+      <path d="
+        M 98 75
+        C 125 70, 160 62, 195 72
+        C 235 84, 258 115, 245 150
+        C 235 178, 205 194, 175 197
+        C 145 199, 118 193, 98 188
+        L 98 174
+        C 120 178, 150 182, 175 178
+        C 205 174, 224 155, 226 132
+        C 228 108, 210 88, 178 82
+        C 148 76, 120 80, 98 83
+        Z
+      " fill="#7C7E83"/>
+
+      <!-- The Lower Loop of 'B' & sweeping arc of 'G' -->
+      <path d="
+        M 98 188
+        C 125 192, 165 192, 195 202
+        C 235 214, 254 245, 238 278
+        C 222 308, 185 324, 142 324
+        C 95 324, 48 304, 30 270
+        C 22 255, 18 240, 18 226
+        L 34 226
+        C 34 245, 46 268, 70 286
+        C 94 302, 125 310, 152 308
+        C 192 305, 218 285, 222 258
+        C 226 230, 204 212, 170 207
+        C 140 203, 115 204, 98 206
+        Z
+      " fill="#7C7E83"/>
+
+      <!-- 'G' Outer Sweeping Bowl & Terminal Crossbar -->
+      <path d="
+        M 175 178
+        C 220 172, 275 195, 305 235
+        C 335 275, 330 328, 288 368
+        C 245 408, 172 415, 115 390
+        L 122 376
+        C 168 398, 230 395, 268 360
+        C 302 328, 308 285, 282 252
+        C 258 222, 215 202, 175 206
+        Z
+      " fill="#7C7E83" opacity="0.95"/>
+
+      <!-- G Vertical Spur and Inward Crossbar -->
+      <path d="
+        M 268 255
+        L 322 255
+        C 328 255, 332 260, 332 268
+        L 332 315
+        C 318 325, 298 335, 280 340
+        L 272 328
+        C 290 322, 308 314, 316 305
+        L 316 270
+        L 268 270
+        Z
+      " fill="#7C7E83"/>
+      
+      <!-- Top terminal hook/serif of G -->
+      <path d="
+        M 270 188
+        C 285 180, 302 182, 310 195
+        C 315 202, 316 212, 310 218
+        C 305 223, 296 222, 292 216
+        C 288 210, 288 202, 280 198
+        Z
+      " fill="#7C7E83"/>
+    </g>
+
+    <!-- Wordmark: TANVIR BASHUNDHARA GROUP -->
+    <text 
+      x="205" 
+      y="352" 
+      text-anchor="middle" 
+      font-family="'Baskerville', 'Times New Roman', 'Didot', 'Georgia', serif" 
+      font-size="20" 
+      font-weight="700" 
+      letter-spacing="5" 
+      fill="#18181A"
+    >
+      TANVIR BASHUNDHARA GROUP
+    </text>
+  </g>
+</svg>

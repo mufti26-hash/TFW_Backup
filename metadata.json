@@ -1,0 +1,8 @@
+{
+  "name": "Toggi Fun World",
+  "description": "Comprehensive theme park operations management system with Google Chat integration, real-time maintenance dispatches, bulk Excel import for rides, counters, and staff, automated cloud database, and live multi-device sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
