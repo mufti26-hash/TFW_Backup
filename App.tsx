@@ -16,7 +16,9 @@ import {
   DEFAULT_PACKAGES,
   DEFAULT_APP_CONFIG,
   getLocalDateString,
-  findLatestRecordedDate
+  findLatestRecordedDate,
+  findPreviousAssignmentsDate,
+  findPreviousTicketSalesAssignmentsDate
 } from './constants';
 import { 
   RideWithCount, 
@@ -494,35 +496,45 @@ const AppContent: React.FC = () => {
         );
     }, [currentUser, attendanceData, today, attendanceArray]);
 
+    const previousAssignmentsDate = useMemo(() => {
+        return findPreviousAssignmentsDate(dailyAssignments, selectedDate);
+    }, [dailyAssignments, selectedDate]);
+
     // Check if assignments can be copied from previous active date
     const canCopyAssignments = useMemo(() => {
         const currentAssigns = dailyAssignments[selectedDate];
         const hasCurrent = currentAssigns && Object.keys(currentAssigns).length > 0;
-        return !hasCurrent && Boolean(latestRecordedDate && latestRecordedDate !== selectedDate && dailyAssignments[latestRecordedDate]);
-    }, [dailyAssignments, selectedDate, latestRecordedDate]);
+        return !hasCurrent && Boolean(previousAssignmentsDate && dailyAssignments[previousAssignmentsDate]);
+    }, [dailyAssignments, selectedDate, previousAssignmentsDate]);
 
-    const handleCopyAssignmentsFromPrevious = useCallback(async () => {
-        if (!latestRecordedDate || !dailyAssignments[latestRecordedDate]) return;
-        const prevAssigns = JSON.parse(JSON.stringify(dailyAssignments[latestRecordedDate]));
+    const handleCopyAssignmentsFromPrevious = useCallback(async (sourceDate?: string) => {
+        const dateToCopy = (typeof sourceDate === 'string' && sourceDate) ? sourceDate : previousAssignmentsDate;
+        if (!dateToCopy || !dailyAssignments[dateToCopy]) return;
+        const prevAssigns = JSON.parse(JSON.stringify(dailyAssignments[dateToCopy]));
         await database.ref(`data/operatorAssignments/${selectedDate}`).set(prevAssigns);
-        logAction('COPY_ASSIGNMENTS', `Copied operator assignments from ${latestRecordedDate} to ${selectedDate}.`);
-        showNotification(`Roster copied from ${latestRecordedDate} to ${selectedDate} successfully!`, 'success');
-    }, [latestRecordedDate, dailyAssignments, selectedDate, logAction, showNotification]);
+        logAction('COPY_ASSIGNMENTS', `Copied operator assignments from ${dateToCopy} to ${selectedDate}.`);
+        showNotification(`Roster copied from ${dateToCopy} to ${selectedDate} successfully!`, 'success');
+    }, [previousAssignmentsDate, dailyAssignments, selectedDate, logAction, showNotification]);
+
+    const previousTicketSalesAssignmentsDate = useMemo(() => {
+        return findPreviousTicketSalesAssignmentsDate(ticketSalesAssignments, selectedDate);
+    }, [ticketSalesAssignments, selectedDate]);
 
     // Check if ticket sales assignments can be copied from previous active date
     const canCopyTicketSalesAssignments = useMemo(() => {
         const currentAssigns = ticketSalesAssignments[selectedDate];
         const hasCurrent = currentAssigns && Object.keys(currentAssigns).length > 0;
-        return !hasCurrent && Boolean(latestRecordedDate && latestRecordedDate !== selectedDate && ticketSalesAssignments[latestRecordedDate]);
-    }, [ticketSalesAssignments, selectedDate, latestRecordedDate]);
+        return !hasCurrent && Boolean(previousTicketSalesAssignmentsDate && ticketSalesAssignments[previousTicketSalesAssignmentsDate]);
+    }, [ticketSalesAssignments, selectedDate, previousTicketSalesAssignmentsDate]);
 
-    const handleCopyTicketSalesAssignmentsFromPrevious = useCallback(async () => {
-        if (!latestRecordedDate || !ticketSalesAssignments[latestRecordedDate]) return;
-        const prevAssigns = JSON.parse(JSON.stringify(ticketSalesAssignments[latestRecordedDate]));
+    const handleCopyTicketSalesAssignmentsFromPrevious = useCallback(async (sourceDate?: string) => {
+        const dateToCopy = (typeof sourceDate === 'string' && sourceDate) ? sourceDate : previousTicketSalesAssignmentsDate;
+        if (!dateToCopy || !ticketSalesAssignments[dateToCopy]) return;
+        const prevAssigns = JSON.parse(JSON.stringify(ticketSalesAssignments[dateToCopy]));
         await database.ref(`data/ticketSalesAssignments/${selectedDate}`).set(prevAssigns);
-        logAction('COPY_TS_ASSIGNMENTS', `Copied ticket sales assignments from ${latestRecordedDate} to ${selectedDate}.`);
-        showNotification(`Sales roster copied from ${latestRecordedDate} to ${selectedDate} successfully!`, 'success');
-    }, [latestRecordedDate, ticketSalesAssignments, selectedDate, logAction, showNotification]);
+        logAction('COPY_TS_ASSIGNMENTS', `Copied ticket sales assignments from ${dateToCopy} to ${selectedDate}.`);
+        showNotification(`Sales roster copied from ${dateToCopy} to ${selectedDate} successfully!`, 'success');
+    }, [previousTicketSalesAssignmentsDate, ticketSalesAssignments, selectedDate, logAction, showNotification]);
 
     const handleLogin = (newRole: any, payload?: any): boolean => {
         const success = login(newRole, payload);
@@ -1555,7 +1567,7 @@ const AppContent: React.FC = () => {
                         attendance={attendanceArray}
                         onCopyPrevious={handleCopyAssignmentsFromPrevious}
                         canCopyPrevious={canCopyAssignments}
-                        latestRecordedDate={latestRecordedDate}
+                        latestRecordedDate={previousAssignmentsDate || latestRecordedDate}
                     />
                 );
             case 'expertise': 
@@ -1585,7 +1597,7 @@ const AppContent: React.FC = () => {
                         onSaveAssignments={handleSaveAssignments}
                         onCopyAssignmentsFromPrevious={handleCopyAssignmentsFromPrevious}
                         canCopyAssignments={canCopyAssignments}
-                        latestRecordedDate={latestRecordedDate}
+                        latestRecordedDate={previousAssignmentsDate || latestRecordedDate}
                     />
                 );
             case 'ticket-sales-dashboard': 
@@ -1618,7 +1630,7 @@ const AppContent: React.FC = () => {
                         attendance={attendanceArray} 
                         onCopyPrevious={handleCopyTicketSalesAssignmentsFromPrevious}
                         canCopyPrevious={canCopyTicketSalesAssignments}
-                        latestRecordedDate={latestRecordedDate}
+                        latestRecordedDate={previousTicketSalesAssignmentsDate || latestRecordedDate}
                     />
                 );
             case 'ts-roster': 
@@ -1647,7 +1659,7 @@ const AppContent: React.FC = () => {
                         isCheckinAllowed={isCheckinAllowed} 
                         onCopyAssignmentsFromPrevious={handleCopyTicketSalesAssignmentsFromPrevious}
                         canCopyAssignments={canCopyTicketSalesAssignments}
-                        latestRecordedDate={latestRecordedDate}
+                        latestRecordedDate={previousTicketSalesAssignmentsDate || latestRecordedDate}
                     />
                 );
             case 'ts-expertise': 
@@ -1772,7 +1784,7 @@ const AppContent: React.FC = () => {
                 selectedDate={selectedDate}
                 onDateChange={setSelectedDate}
                 today={today}
-                latestRecordedDate={latestRecordedDate}
+                latestRecordedDate={previousAssignmentsDate || latestRecordedDate}
                 hasDataForSelectedDate={hasDataForSelectedDate}
                 hasDataForToday={hasDataForToday}
                 onCopyAssignmentsFromPrevious={handleCopyAssignmentsFromPrevious}

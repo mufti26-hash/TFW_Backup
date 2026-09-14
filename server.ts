@@ -2070,8 +2070,8 @@ async function startServer() {
     }
 
     // User directive: "Please sync only ' Technical support TFW' , rest of the msg will not come into Reported Issue (Associates)"
-    const targetGroupId = '120363024724303859@g.us';
-    const targetGroupName = 'Technical support TFW';
+    const targetGroupId = cfg.groupChatId || '120363024724303859@g.us';
+    const targetGroupName = cfg.targetGroupName || cfg.detectedGroupName || 'Technical support TFW';
 
     // Seed set of WhatsApp message IDs that already have tickets in maintenanceTickets
     const existingTicketMsgIds = new Set<string>();
@@ -2080,7 +2080,6 @@ async function startServer() {
         for (const t of Object.values(db.data.maintenanceTickets[d]) as any[]) {
           if (t?.whatsappMessageId) {
             existingTicketMsgIds.add(String(t.whatsappMessageId));
-            markWhatsAppMessageProcessed(String(t.whatsappMessageId));
           }
         }
       }
@@ -2090,30 +2089,54 @@ async function startServer() {
       // Strictly fetch messages only from the official "Technical support TFW" group (120363024724303859@g.us)
       const allIncomingMessages: any[] = [];
 
+      // 1. Primary method: lastIncomingMessages (high performance, no 429 rate limit)
       try {
-        const historyUrl = `https://api.green-api.com/waInstance${idInstance}/getChatHistory/${apiTokenInstance}`;
-        const res = await fetch(historyUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chatId: targetGroupId, count: 50 })
-        });
-        if (res.status === 429) {
-          greenApiRateLimitedUntil = Date.now() + 25000;
-          return { success: false, newTickets: 0, error: 'Green API rate limited (429) - waiting for cooldown' };
-        }
+        const minutesToFetch = force ? 1440 : 240;
+        const incomingUrl = `https://api.green-api.com/waInstance${idInstance}/lastIncomingMessages/${apiTokenInstance}?minutes=${minutesToFetch}`;
+        const res = await fetch(incomingUrl);
         if (res.ok) {
           const list = await res.json();
           if (Array.isArray(list)) {
             for (const m of list) {
               if (m) {
-                m._sourceChatId = targetGroupId;
-                allIncomingMessages.push(m);
+                const cId = String(m.chatId || '');
+                if (cId === targetGroupId || cId.includes('120363024724303859')) {
+                  m._sourceChatId = targetGroupId;
+                  allIncomingMessages.push(m);
+                }
               }
             }
           }
         }
       } catch (e) {
-        console.error('[WhatsApp Sync] Failed to fetch chat history for Technical support TFW:', e);
+        console.error('[WhatsApp Sync] Error querying lastIncomingMessages:', e);
+      }
+
+      // 2. Secondary fallback: getChatHistory (only when manually triggered or when lastIncomingMessages is empty)
+      if (force || allIncomingMessages.length === 0) {
+        try {
+          const historyUrl = `https://api.green-api.com/waInstance${idInstance}/getChatHistory/${apiTokenInstance}`;
+          const res = await fetch(historyUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chatId: targetGroupId, count: 50 })
+          });
+          if (res.status === 429) {
+            greenApiRateLimitedUntil = Date.now() + 30000;
+          } else if (res.ok) {
+            const list = await res.json();
+            if (Array.isArray(list)) {
+              for (const m of list) {
+                if (m) {
+                  m._sourceChatId = targetGroupId;
+                  allIncomingMessages.push(m);
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // Gracefully ignore rate limit on chat history fallback
+        }
       }
 
       // Deduplicate array by idMessage
@@ -2150,23 +2173,6 @@ async function startServer() {
         const idMessage = String(m.idMessage || '');
         if (!idMessage) continue;
 
-        // If this message already created a ticket that currently exists in maintenanceTickets, skip creation
-        if (existingTicketMsgIds.has(idMessage)) {
-          markWhatsAppMessageProcessed(idMessage);
-          continue;
-        }
-
-        // If user explicitly deleted this specific WhatsApp message, honor the deletion
-        if (db.config?.deletedWhatsAppMessageIds?.includes(idMessage)) {
-          markWhatsAppMessageProcessed(idMessage);
-          continue;
-        }
-
-        // In normal polling, skip if already marked processed
-        if (!force && processedWhatsAppMessageIds.has(idMessage)) {
-          continue;
-        }
-
         // Skip automated bot messages sent by our system via API or outgoing messages
         if (m.sendByApi === true || m.type === 'outgoing') {
           markWhatsAppMessageProcessed(idMessage);
@@ -2197,12 +2203,6 @@ async function startServer() {
           continue;
         }
 
-        // Strictly filter out any resolved records or maintenance broadcasts so they never create tickets
-        if (isResolutionOrSystemMessage(cleanMessage)) {
-          markWhatsAppMessageProcessed(idMessage);
-          continue;
-        }
-
         // Sender info
         const senderName = String(
           m.senderContactName ||
@@ -2230,13 +2230,85 @@ async function startServer() {
           ''
         );
 
+        const msgTime = m.timestamp ? new Date(m.timestamp * 1000) : new Date();
+
+        // Check if this message is a quoted reply to an earlier ticket
+        const quotedStanzaId = String(
+          m.quotedMessage?.stanzaId ||
+          m.extendedTextMessage?.stanzaId ||
+          m.messageData?.extendedTextMessageData?.stanzaId ||
+          ''
+        );
+
+        if (quotedStanzaId) {
+          const quotedExisting = findExistingMaintenanceTicket(db, '', quotedStanzaId, 0, '');
+          if (quotedExisting) {
+            const lower = cleanMessage.toLowerCase();
+            const isWorkOnGoing = lower.includes('work is going on') || lower.includes('working') || lower.includes('in progress') || lower.includes('checking') || lower.includes('inspecting');
+            const isSolvedMsg = lower.includes('problem solved') || lower.includes('game is operational') || lower.includes('operational') || lower.includes('issue resolved') || lower.includes('solved') || lower.includes('fixed') || lower.includes('repaired') || lower.includes('done');
+
+            if (isSolvedMsg && quotedExisting.ticket.status !== 'solved') {
+              quotedExisting.ticket.status = 'solved';
+              quotedExisting.ticket.solvedAt = msgTime.toISOString();
+              quotedExisting.ticket.resolutionNotes = cleanMessage;
+              quotedExisting.ticket.assignedToName = senderName;
+
+              // Parse helper technicians if mentioned: e.g. "Assist @Alif @Farhan"
+              const mentionMatches = cleanMessage.match(/@([a-zA-Z0-9_.-]+)/g);
+              if (mentionMatches && mentionMatches.length > 0) {
+                quotedExisting.ticket.helperNames = mentionMatches.map((x: string) => x.replace(/^@/, '').trim());
+              }
+
+              db.data.maintenanceTickets[quotedExisting.dateKey][quotedExisting.ticketId] = quotedExisting.ticket;
+              newTicketUpdates[`data/maintenanceTickets/${quotedExisting.dateKey}/${quotedExisting.ticketId}`] = quotedExisting.ticket;
+              markWhatsAppMessageProcessed(idMessage);
+              newTicketsCount++;
+              continue;
+            } else if (isWorkOnGoing && quotedExisting.ticket.status === 'reported') {
+              quotedExisting.ticket.status = 'in-progress';
+              quotedExisting.ticket.inProgressAt = msgTime.toISOString();
+              quotedExisting.ticket.assignedToName = senderName;
+              db.data.maintenanceTickets[quotedExisting.dateKey][quotedExisting.ticketId] = quotedExisting.ticket;
+              newTicketUpdates[`data/maintenanceTickets/${quotedExisting.dateKey}/${quotedExisting.ticketId}`] = quotedExisting.ticket;
+              markWhatsAppMessageProcessed(idMessage);
+              newTicketsCount++;
+              continue;
+            } else {
+              markWhatsAppMessageProcessed(idMessage);
+              continue;
+            }
+          }
+        }
+
+        // Strictly filter out any resolved records or maintenance broadcasts so they never create new tickets
+        if (isResolutionOrSystemMessage(cleanMessage)) {
+          markWhatsAppMessageProcessed(idMessage);
+          continue;
+        }
+
+        // If this message already created a ticket that currently exists in maintenanceTickets, skip creation
+        if (existingTicketMsgIds.has(idMessage)) {
+          markWhatsAppMessageProcessed(idMessage);
+          continue;
+        }
+
+        // If user explicitly deleted this specific WhatsApp message, honor the deletion
+        if (db.config?.deletedWhatsAppMessageIds?.includes(idMessage)) {
+          markWhatsAppMessageProcessed(idMessage);
+          continue;
+        }
+
+        // In normal polling, skip if already marked processed
+        if (!force && processedWhatsAppMessageIds.has(idMessage)) {
+          continue;
+        }
+
         // Match ride using prioritized matcher
         const matchedRide = matchRideFromMessage(cleanMessage, ridesList);
 
         // Detect priority
         const priority = detectTicketPriority(cleanMessage);
 
-        const msgTime = m.timestamp ? new Date(m.timestamp * 1000) : new Date();
         const ticketDate = getDhakaDateString(msgTime);
         const ticketId = `${ticketDate}-${matchedRide.id}-${m.timestamp || now}`;
 
@@ -2256,11 +2328,9 @@ async function startServer() {
         const existing = findExistingMaintenanceTicket(db, ticketId, idMessage, matchedRide.id, cleanMessage);
         if (existing) {
           markWhatsAppMessageProcessed(idMessage);
-          // If already in-progress or solved, NEVER overwrite or downgrade status!
           if (existing.ticket.status === 'solved' || existing.ticket.status === 'in-progress') {
             continue;
           }
-          // If reported, only update photoUrl if it was missing
           if (imageUrl && !existing.ticket.photoUrl) {
             existing.ticket.photoUrl = imageUrl;
             db.data.maintenanceTickets[existing.dateKey][existing.ticketId] = existing.ticket;
@@ -2268,9 +2338,6 @@ async function startServer() {
           }
           continue;
         }
-
-        const msgChatId = targetGroupId;
-        const msgGroupName = targetGroupName;
 
         const newTicket = {
           id: ticketId,
@@ -2321,7 +2388,7 @@ async function startServer() {
         db.config.whatsappConfig.lastSender = senderName;
         db.config.whatsappConfig.lastMessageAt = msgTime.toISOString();
 
-        // Queue real-time delta update paths (use ticketDate so it lands in the right date container)
+        // Queue real-time delta update paths
         newTicketUpdates[`data/maintenanceTickets/${ticketDate}/${ticketId}`] = newTicket;
         newTicketUpdates[`data/historyLog/${historyId}`] = historyEntry;
         newTicketUpdates['config/whatsappConfig'] = db.config.whatsappConfig;
@@ -2338,7 +2405,7 @@ async function startServer() {
           updates: newTicketUpdates,
           senderId: 'server-instance'
         });
-        console.log(`[WhatsApp Sync Engine] Synchronized ${newTicketsCount} new tickets from WhatsApp`);
+        console.log(`[WhatsApp Sync Engine] Synchronized ${newTicketsCount} updates/new tickets from WhatsApp`);
       }
 
       return { success: true, newTickets: newTicketsCount };
@@ -2393,23 +2460,43 @@ async function startServer() {
     const apiTokenInstance = cfg.apiTokenInstance || process.env.GREEN_API_TOKEN_INSTANCE || '8ef1451101d7484cbd2e35bbc21615f1c3b929591a9644e9a8';
     if (!idInstance || !apiTokenInstance) return;
 
-    const appUrl = process.env.APP_URL || process.env.ORIGIN || 'https://ais-dev-57yrju4daawns34nnirr2j-662885913055.asia-southeast1.run.app';
-    const webhookUrl = `${appUrl.replace(/\/$/, '')}/api/webhooks/whatsapp`;
+    const appUrl = process.env.APP_URL;
+    const isPublicDomain = appUrl && 
+      appUrl.startsWith('https://') && 
+      !appUrl.includes('localhost') && 
+      !appUrl.includes('127.0.0.1') &&
+      !appUrl.includes('ais-dev-');
 
     try {
-      const res = await fetch(`https://api.green-api.com/waInstance${idInstance}/setSettings/${apiTokenInstance}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          webhookUrl,
-          incomingWebhook: 'yes',
-          outgoingWebhook: 'yes',
-          outgoingMessageWebhook: 'yes',
-          outgoingAPIMessageWebhook: 'no'
-        })
-      });
-      if (res.ok) {
-        console.log(`[Green API] Webhook registered successfully to: ${webhookUrl}`);
+      if (isPublicDomain) {
+        const webhookUrl = `${appUrl.replace(/\/$/, '')}/api/webhooks/whatsapp`;
+        const res = await fetch(`https://api.green-api.com/waInstance${idInstance}/setSettings/${apiTokenInstance}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            webhookUrl,
+            incomingWebhook: 'yes',
+            outgoingWebhook: 'yes',
+            outgoingMessageWebhook: 'yes',
+            outgoingAPIMessageWebhook: 'no'
+          })
+        });
+        if (res.ok) {
+          console.log(`[Green API] Webhook registered successfully to: ${webhookUrl}`);
+        }
+      } else {
+        // Offline / Local deployment mode: Clear webhook so Green API delivers via direct API polling without failing
+        const res = await fetch(`https://api.green-api.com/waInstance${idInstance}/setSettings/${apiTokenInstance}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            webhookUrl: '',
+            incomingWebhook: 'no'
+          })
+        });
+        if (res.ok) {
+          console.log('[Green API] Running in offline / direct API polling mode. Webhook cleared.');
+        }
       }
     } catch (e) {
       console.error('[Green API] Failed to set webhook settings:', e);
@@ -2421,14 +2508,14 @@ async function startServer() {
     configureGreenApiWebhook().catch(() => {});
   }, 1000);
 
-  // Background periodic polling every 12 seconds for reliable message detection without hitting rate limits
+  // Background periodic polling every 25 seconds for reliable message detection without hitting rate limits
   setInterval(() => {
     syncGreenApiGroupMessages().catch(() => {});
-  }, 12000);
+  }, 25000);
 
   // Initial sync 2 seconds after startup
   setTimeout(() => {
-    syncGreenApiGroupMessages().catch(() => {});
+    syncGreenApiGroupMessages(true).catch(() => {});
   }, 2000);
 
   // Batch update

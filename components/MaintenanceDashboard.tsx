@@ -307,21 +307,10 @@ export const MaintenanceDashboard: React.FC<Props> = ({
     }
   };
 
-  // Auto-sync on mount and background poll every 8 seconds
+  // Fetch WhatsApp config and sync on mount (background server handles continuous 25s polling)
   useEffect(() => {
     fetchWhatsAppConfig();
     handleSyncWhatsAppNow();
-    const interval = setInterval(() => {
-      fetch('/api/whatsapp/sync-now', { method: 'POST' })
-        .then(r => r.json())
-        .then(data => {
-          if (data && data.success && data.newTickets > 0) {
-            database.engine.fetchFullDatabase();
-          }
-        })
-        .catch(() => {});
-    }, 8000);
-    return () => clearInterval(interval);
   }, []);
 
   // Synchronize maintenance tab, viewScope, and portalType across all devices in real-time

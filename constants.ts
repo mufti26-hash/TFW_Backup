@@ -284,4 +284,78 @@ export const findLatestRecordedDate = (
   return Array.from(dates).sort().reverse()[0];
 };
 
+/**
+ * Finds the most recent date with operator assignments strictly before currentDate.
+ * If none exists before currentDate, falls back to any previous date with assignments.
+ */
+export const findPreviousAssignmentsDate = (
+  operatorAssignments?: Record<string, any>,
+  currentDate?: string
+): string | null => {
+  if (!operatorAssignments || typeof operatorAssignments !== 'object') return null;
+
+  const validDates = Object.entries(operatorAssignments)
+    .filter(([d, assigns]) => {
+      if (!assigns || typeof assigns !== 'object') return false;
+      return Object.values(assigns).some((arr: any) => {
+        if (Array.isArray(arr)) return arr.length > 0;
+        return Boolean(arr);
+      });
+    })
+    .map(([d]) => d)
+    .sort(); // ascending
+
+  if (validDates.length === 0) return null;
+
+  if (currentDate) {
+    const priorDates = validDates.filter(d => d < currentDate);
+    if (priorDates.length > 0) {
+      return priorDates[priorDates.length - 1]; // closest date strictly before currentDate
+    }
+    const otherDates = validDates.filter(d => d !== currentDate);
+    if (otherDates.length > 0) {
+      return otherDates[otherDates.length - 1];
+    }
+  }
+
+  return validDates[validDates.length - 1];
+};
+
+/**
+ * Finds the most recent date with ticket sales assignments strictly before currentDate.
+ */
+export const findPreviousTicketSalesAssignmentsDate = (
+  ticketSalesAssignments?: Record<string, any>,
+  currentDate?: string
+): string | null => {
+  if (!ticketSalesAssignments || typeof ticketSalesAssignments !== 'object') return null;
+
+  const validDates = Object.entries(ticketSalesAssignments)
+    .filter(([d, assigns]) => {
+      if (!assigns || typeof assigns !== 'object') return false;
+      return Object.values(assigns).some((arr: any) => {
+        if (Array.isArray(arr)) return arr.length > 0;
+        return Boolean(arr);
+      });
+    })
+    .map(([d]) => d)
+    .sort();
+
+  if (validDates.length === 0) return null;
+
+  if (currentDate) {
+    const priorDates = validDates.filter(d => d < currentDate);
+    if (priorDates.length > 0) {
+      return priorDates[priorDates.length - 1];
+    }
+    const otherDates = validDates.filter(d => d !== currentDate);
+    if (otherDates.length > 0) {
+      return otherDates[otherDates.length - 1];
+    }
+  }
+
+  return validDates[validDates.length - 1];
+};
+
+
 

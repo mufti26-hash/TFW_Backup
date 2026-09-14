@@ -710,6 +710,21 @@ export const DailyRoster = ({
 }: any) => {
   const [rosterSearch, setRosterSearch] = useState('');
   const [rosterFilter, setRosterFilter] = useState<'all' | 'unassigned' | 'assigned'>('all');
+  const [selectedCopyDate, setSelectedCopyDate] = useState(latestRecordedDate || '');
+
+  const availablePriorDates = useMemo(() => {
+    if (!dailyAssignments) return [];
+    return Object.keys(dailyAssignments)
+      .filter(d => d < selectedDate && dailyAssignments[d] && Object.keys(dailyAssignments[d]).length > 0)
+      .sort()
+      .reverse();
+  }, [dailyAssignments, selectedDate]);
+
+  useEffect(() => {
+    if (latestRecordedDate) {
+      setSelectedCopyDate(latestRecordedDate);
+    }
+  }, [latestRecordedDate]);
   
   if (role === 'admin' || role === 'operation-officer') {
     const assignments = dailyAssignments[selectedDate] || {};
@@ -810,11 +825,11 @@ export const DailyRoster = ({
             {canCopyAssignments && onCopyAssignmentsFromPrevious && (
               <button
                 type="button"
-                onClick={onCopyAssignmentsFromPrevious}
+                onClick={() => onCopyAssignmentsFromPrevious(selectedCopyDate || latestRecordedDate)}
                 className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white rounded-xl text-xs font-semibold shadow transition-all flex items-center gap-1.5"
-                title={`Copy previous roster from ${latestRecordedDate}`}
+                title={`Copy previous roster from ${selectedCopyDate || latestRecordedDate}`}
               >
-                <span>📋 Copy from {latestRecordedDate}</span>
+                <span>📋 Copy from {selectedCopyDate || latestRecordedDate}</span>
               </button>
             )}
 
@@ -839,6 +854,47 @@ export const DailyRoster = ({
             </div>
           </div>
         </div>
+
+        {/* Quick Copy Alert when roster is unpopulated */}
+        {assignedOperatorsList.length === 0 && canCopyAssignments && onCopyAssignmentsFromPrevious && (
+          <div className="bg-gradient-to-r from-indigo-950/70 via-blue-950/60 to-purple-950/50 border border-indigo-500/60 p-4 sm:p-5 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-lg">
+            <div className="flex items-start gap-3">
+              <span className="text-2xl mt-0.5">📋</span>
+              <div>
+                <h4 className="text-sm sm:text-base font-bold text-white">No Associates Assigned for {selectedDate}</h4>
+                <p className="text-xs text-indigo-200/90 mt-0.5">
+                  Previous operational roster is available from <strong>{selectedCopyDate || latestRecordedDate}</strong>. Choose a source date to restore for today:
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 self-stretch sm:self-auto">
+              {availablePriorDates.length > 1 && (
+                <select
+                  value={selectedCopyDate || latestRecordedDate}
+                  onChange={(e) => setSelectedCopyDate(e.target.value)}
+                  className="bg-gray-900 border border-indigo-500/50 text-white text-xs px-2.5 py-2 rounded-xl outline-none"
+                  title="Select source date to copy assignments from"
+                >
+                  {availablePriorDates.map(d => {
+                    const count = Object.keys(dailyAssignments[d] || {}).length;
+                    return (
+                      <option key={d} value={d}>
+                        {d} ({count} rides)
+                      </option>
+                    );
+                  })}
+                </select>
+              )}
+              <button
+                type="button"
+                onClick={() => onCopyAssignmentsFromPrevious(selectedCopyDate || latestRecordedDate)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs sm:text-sm font-bold rounded-xl shadow-md transition-all flex items-center gap-2 whitespace-nowrap flex-grow sm:flex-grow-0 justify-center"
+              >
+                <span>📋 Restore Roster</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Daily Roster Attendance Summary Stats Row */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
@@ -1350,6 +1406,28 @@ export const TicketSalesRoster = ({
             </div>
           </div>
         </div>
+
+        {/* Quick Copy Alert when sales roster is unpopulated */}
+        {assignedStaffList.length === 0 && canCopyAssignments && onCopyAssignmentsFromPrevious && (
+          <div className="bg-gradient-to-r from-teal-950/70 via-cyan-950/60 to-emerald-950/50 border border-teal-500/60 p-4 sm:p-5 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-lg">
+            <div className="flex items-start gap-3">
+              <span className="text-2xl mt-0.5">📋</span>
+              <div>
+                <h4 className="text-sm sm:text-base font-bold text-white">No Cashiers Assigned for {selectedDate}</h4>
+                <p className="text-xs text-teal-200/90 mt-0.5">
+                  Previous counter sales roster is available from <strong>{latestRecordedDate}</strong>. Would you like to restore it for today?
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onCopyAssignmentsFromPrevious}
+              className="px-4 py-2.5 bg-teal-600 hover:bg-teal-500 active:scale-95 text-white text-xs sm:text-sm font-bold rounded-xl shadow-md transition-all flex items-center gap-2 whitespace-nowrap self-stretch sm:self-auto justify-center"
+            >
+              <span>📋 Copy Sales Roster from {latestRecordedDate}</span>
+            </button>
+          </div>
+        )}
 
         {/* Attendance Summary Stats Row */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
