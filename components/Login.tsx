@@ -1,7 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Operator, AppConfig } from '../types';
-import { Shield, Users, KeyRound, Wrench, Smartphone, Share2, Sparkles, UserCheck, Briefcase, Eye, EyeOff, Lock, HeartHandshake } from 'lucide-react';
+import { Shield, Users, KeyRound, Wrench, Smartphone, Share2, Sparkles, UserCheck, Briefcase, Eye, EyeOff, Lock, HeartHandshake, BarChart3 } from 'lucide-react';
 import { ShareModal } from './ShareModal';
+import { 
+  unlockAudio, 
+  isAudioReady
+} from '../utils/soundAlerts';
 
 interface Props {
   onLogin: (role: any, payload?: any) => boolean;
@@ -25,6 +29,8 @@ const Login: React.FC<Props> = ({
   appConfig,
   connectionStatus = 'connected'
 }) => {
+  const [soundArmed, setSoundArmed] = useState<boolean>(() => isAudioReady());
+
   // Base system definitions
   const baseRoleDefs = useMemo(() => [
     { id: 'operator', defaultName: 'Games & Ride Associate', icon: Users, color: 'blue', desc: 'Roster & Ride Counts', dept: 'operations' },
@@ -33,6 +39,7 @@ const Login: React.FC<Props> = ({
     { id: 'sales-officer', defaultName: 'Sales Executive', icon: Briefcase, color: 'emerald', desc: 'Sales Audits & Reports', dept: 'sales' },
     { id: 'maintenance', defaultName: 'Maintenance', icon: Wrench, color: 'amber', desc: 'Repairs & Technical Logs', dept: 'maintenance' },
     { id: 'cx', defaultName: 'Customer Experience (CX)', icon: HeartHandshake, color: 'rose', desc: 'Guest Feedback & Ride Issues', dept: 'general' },
+    { id: 'management', defaultName: 'Management', icon: BarChart3, color: 'purple', desc: 'Consolidated Executive Overview', dept: 'management' },
     { id: 'admin', defaultName: 'Administrator', icon: Shield, color: 'purple', desc: 'Full System Control', dept: 'management' },
   ], []);
 
@@ -219,12 +226,42 @@ const Login: React.FC<Props> = ({
         return;
       }
       onLogin('maintenance', { id: 903, name: 'Maintenance Engineer', role: 'Maintenance Engineer' });
+    } else if (selectedRole === 'management') {
+      const expectedManagementPassword = appConfig?.managementPassword || 'manage79';
+      if (
+        password !== expectedManagementPassword &&
+        password !== 'manage79' &&
+        password !== 'management79' &&
+        password !== expectedAdminPassword &&
+        password !== 'admin79'
+      ) {
+        setError('Invalid Management Password.');
+        return;
+      }
+      onLogin('management', { id: 990, name: 'Management', role: 'Management' });
     } else if (selectedRole === 'cx') {
+      const expectedCxPassword = appConfig?.cxPassword || 'cx79';
+      if (
+        password !== expectedCxPassword &&
+        password !== 'cx79' &&
+        password !== 'cx123' &&
+        password !== expectedAdminPassword &&
+        password !== 'admin79'
+      ) {
+        setError('Invalid Customer Experience Password.');
+        return;
+      }
       const cxMember = cxPersonnel.find(o => o.id.toString() === selectedUser);
       if (cxMember) {
         onLogin('cx', { ...cxMember, role: cxMember.role || 'Customer Experience (CX)' });
+      } else if (selectedUser.trim()) {
+        onLogin('cx', { id: 914, name: selectedUser.trim(), role: 'Customer Experience (CX)' });
       } else {
-        setError('Please select your Customer Experience (CX) member name.');
+        if (cxPersonnel.length > 0) {
+          setError('Please select your Customer Experience (CX) member name.');
+        } else {
+          onLogin('cx', { id: 914, name: 'Customer Experience Specialist', role: 'Customer Experience (CX)' });
+        }
       }
     } else if (selectedRole === 'operator') {
       const op = operators.find(o => o.id.toString() === selectedUser);
@@ -300,7 +337,10 @@ const Login: React.FC<Props> = ({
       </div>
 
       {/* Centered Login Card */}
-      <div className="w-full max-w-lg bg-gray-850 rounded-2xl shadow-2xl p-6 sm:p-8 border border-gray-700/80 backdrop-blur-xl relative z-10 animate-fade-in-up pt-8 my-4">
+      <div 
+        onClick={() => { if (!soundArmed) { unlockAudio(); setSoundArmed(true); } }}
+        className="w-full max-w-lg bg-gray-850 rounded-2xl shadow-2xl p-6 sm:p-8 border border-gray-700/80 backdrop-blur-xl relative z-10 animate-fade-in-up pt-8 my-4"
+      >
         <div className="text-center mb-6">
           {appLogo ? (
             <img src={appLogo} alt="Logo" className="h-16 mx-auto mb-3 object-contain rounded-xl p-1 bg-gray-900 border border-gray-700"/>
@@ -403,20 +443,55 @@ const Login: React.FC<Props> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5 flex items-center justify-between">
-                  <span>Select CX Specialist Name</span>
+                  <span>Select or Enter CX Specialist Name</span>
                   <span className="text-[10px] font-bold text-rose-400 bg-rose-950/60 px-1.5 py-0.5 rounded border border-rose-800 font-mono">CX</span>
                 </label>
-                <select 
-                  value={selectedUser}
-                  onChange={(e) => setSelectedUser(e.target.value)}
-                  className="w-full bg-gray-900 text-white rounded-xl p-3 text-sm border border-rose-500/40 focus:border-rose-400 outline-none transition-colors"
-                  required
-                >
-                  <option value="">-- Choose CX Member --</option>
-                  {cxPersonnel.map(op => (
-                    <option key={op.id} value={op.id}>{op.name} {op.role ? `(${op.role})` : ''}</option>
-                  ))}
-                </select>
+                {cxPersonnel && cxPersonnel.length > 0 ? (
+                  <select 
+                    value={selectedUser}
+                    onChange={(e) => setSelectedUser(e.target.value)}
+                    className="w-full bg-gray-900 text-white rounded-xl p-3 text-sm border border-rose-500/40 focus:border-rose-400 outline-none transition-colors"
+                    required
+                  >
+                    <option value="">-- Choose CX Member --</option>
+                    {cxPersonnel.map(op => (
+                      <option key={op.id} value={op.id}>{op.name} {op.role ? `(${op.role})` : ''}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={selectedUser}
+                    onChange={(e) => setSelectedUser(e.target.value)}
+                    placeholder="Enter your name / CX Specialist ID"
+                    className="w-full bg-gray-900 text-white rounded-xl p-3 text-sm border border-rose-500/40 focus:border-rose-400 outline-none transition-colors"
+                    required
+                  />
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                  <span>Customer Experience Password</span>
+                </label>
+                <div className="relative">
+                  <input 
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full bg-gray-900 text-white rounded-xl p-3 pr-10 text-sm border border-rose-500/40 focus:border-rose-400 outline-none transition-colors"
+                    placeholder="Enter CX password"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200 cursor-pointer p-1"
+                    title={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -584,6 +659,45 @@ const Login: React.FC<Props> = ({
             </div>
           )}
 
+          {/* Executive Management Concern & Password */}
+          {selectedRole === 'management' && (
+            <div className="space-y-3.5 p-4 bg-purple-950/30 rounded-xl border border-purple-700/50 animate-fade-in-up">
+              <div className="flex items-center gap-2.5 text-purple-300 pb-2 border-b border-purple-800/40">
+                <div className="p-1.5 bg-purple-900/60 rounded-lg border border-purple-700/60 text-purple-300">
+                  <BarChart3 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">{currentRoleObj?.name || 'Executive Management'} Concern</h4>
+                  <p className="text-[11px] text-purple-300/80">Consolidated executive overview: today's guest counts, sales breakdown, staff attendance & maintenance</p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                  <span>Management Password</span>
+                </label>
+                <div className="relative">
+                  <input 
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full bg-gray-900 text-white rounded-xl p-3 pr-10 text-sm border border-purple-500/40 focus:border-purple-400 outline-none transition-colors"
+                    placeholder="Enter management password"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200 cursor-pointer p-1"
+                    title={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Administrator Password */}
           {selectedRole === 'admin' && (
             <div className="space-y-3.5 p-4 bg-purple-950/30 rounded-xl border border-purple-700/50 animate-fade-in-up">
@@ -628,6 +742,8 @@ const Login: React.FC<Props> = ({
             className={`w-full py-3.5 rounded-xl font-bold text-white transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer ${
               selectedRole === 'admin' 
                 ? 'bg-purple-600 hover:bg-purple-500 shadow-purple-900/30' 
+                : selectedRole === 'management'
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 shadow-purple-900/40'
                 : selectedRole === 'operation-officer'
                 ? 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-900/30' 
                 : selectedRole === 'sales-officer'
@@ -643,6 +759,8 @@ const Login: React.FC<Props> = ({
           >
             {selectedRole === 'admin' ? (
               <Shield className="w-4 h-4" />
+            ) : selectedRole === 'management' ? (
+              <BarChart3 className="w-4 h-4" />
             ) : selectedRole === 'operation-officer' ? (
               <Sparkles className="w-4 h-4" />
             ) : selectedRole === 'sales-officer' ? (
@@ -659,6 +777,8 @@ const Login: React.FC<Props> = ({
             <span>
               {selectedRole === 'operation-officer' 
                 ? `Sign In as ${currentRoleObj?.name || 'Operation Officer'}` 
+                : selectedRole === 'management'
+                ? `Sign In as ${currentRoleObj?.name || 'Management'}`
                 : selectedRole === 'sales-officer'
                 ? `Sign In as ${currentRoleObj?.name || 'Sales Executive'}`
                 : selectedRole === 'maintenance'

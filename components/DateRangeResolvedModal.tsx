@@ -96,11 +96,18 @@ export const DateRangeResolvedModal: React.FC<Props> = ({
 
   if (!isOpen) return null;
 
-  // Identify CX tickets
+  // Identify CX tickets - strictly sent by Customer Experience role
   const isCxTicket = (t: MaintenanceTicket) => {
-    return t.source === 'cx' || 
-      t.reportedByRole?.toLowerCase().includes('cx') || 
-      t.reportedByRole?.toLowerCase().includes('customer experience');
+    if (!t) return false;
+    if (t.source === 'whatsapp') return false;
+    if (t.source === 'operator') {
+      const r = (t.reportedByRole || '').toLowerCase();
+      if (!r.includes('cx') && !r.includes('customer experience')) return false;
+    }
+    if (t.source === 'cx') return true;
+    const role = (t.reportedByRole || '').toLowerCase();
+    const name = (t.reportedByName || '').toLowerCase();
+    return role.includes('cx') || role.includes('customer experience') || name.includes('customer experience') || name.includes('(cx)');
   };
 
   // Calculate turnaround duration

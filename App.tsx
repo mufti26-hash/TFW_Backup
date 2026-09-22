@@ -18,7 +18,8 @@ import {
   getLocalDateString,
   findLatestRecordedDate,
   findPreviousAssignmentsDate,
-  findPreviousTicketSalesAssignmentsDate
+  findPreviousTicketSalesAssignmentsDate,
+  DEFAULT_OTHER_SALES_CATEGORIES
 } from './constants';
 import { 
   RideWithCount, 
@@ -33,7 +34,8 @@ import {
   PackageSalesData, 
   MaintenanceTicket,
   PackageItem,
-  AppConfig
+  AppConfig,
+  ManagementSummaryNotes
 } from './types';
 import { useAuth, Role } from './hooks/useAuth';
 import useFirebaseSync from './hooks/useFirebaseSync';
@@ -47,11 +49,13 @@ import RideCard from './components/RideCard';
 import Footer from './components/Footer';
 import Dashboard from './components/Dashboard';
 import MaintenanceDashboard from './components/MaintenanceDashboard';
+import { ManagementSummaryView } from './components/ManagementSummaryView';
 import { AdminManager } from './components/AdminManager';
 import { ShareModal } from './components/ShareModal';
 import { DeveloperModal } from './components/DeveloperModal';
 import { DateNavigationBar } from './components/DateNavigationBar';
 import { ConfirmModal } from './components/ConfirmModal';
+import { playReportedIssueSound, playSolvedIssueSound, unlockAudio } from './utils/soundAlerts';
 
 // Imports from Views.tsx
 import {
@@ -69,9 +73,11 @@ import {
   TicketSalesExpertiseReport,
   HistoryLog,
   DailySalesEntry,
-  SalesOfficerDashboard,
-  ConfigErrorScreen
+  ConfigErrorScreen,
+  CustomerExperienceView,
+  OperationOfficerRideView
 } from './components/Views';
+import { SalesOfficerDashboard } from './components/SalesOfficerDashboard';
 
 // Notification System Implementation
 interface NotificationState {
@@ -107,8 +113,8 @@ const NotificationProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   );
 };
 
-type View = 'counter' | 'reports' | 'assignments' | 'expertise' | 'roster' | 'ticket-sales-dashboard' | 'ts-assignments' | 'ts-roster' | 'ts-expertise' | 'history' | 'my-sales' | 'sales-officer-dashboard' | 'dashboard' | 'maintenance-dashboard' | 'cx-feedback';
-type Modal = 'edit-image' | 'operators' | 'backup' | 'admin-manager' | 'share' | 'developer' | null;
+type View = 'counter' | 'reports' | 'assignments' | 'expertise' | 'roster' | 'ticket-sales-dashboard' | 'ts-assignments' | 'ts-roster' | 'ts-expertise' | 'history' | 'my-sales' | 'sales-officer-dashboard' | 'dashboard' | 'maintenance-dashboard' | 'cx-feedback' | 'management-summary';
+type Modal = 'edit-image' | 'operators' | 'backup' | 'admin-manager' | 'share' | 'developer' | 'presentation' | null;
 type FirebaseObject<T extends { id: number | string }> = Record<string | number, Omit<T, 'id'>>;
 
 const AppContent: React.FC = () => {
@@ -121,7 +127,9 @@ const AppContent: React.FC = () => {
 
     // App State
     const getInitialViewForRole = useCallback((r: Role): View => {
-        if (r === 'admin' || r === 'operation-officer') return 'dashboard';
+        if (r === 'management') return 'management-summary';
+        if (r === 'admin') return 'dashboard';
+        if (r === 'operation-officer') return 'counter';
         if (r === 'sales-officer') return 'sales-officer-dashboard';
         if (r === 'ticket-sales') return 'ts-roster';
         if (r === 'operator') return 'roster';
@@ -132,12 +140,13 @@ const AppContent: React.FC = () => {
 
     const isViewAllowedForRole = useCallback((v: View, r: Role): boolean => {
         if (r === 'admin') return true;
+        if (r === 'management') return v === 'management-summary';
         if (r === 'operator') return v === 'roster' || v === 'counter';
         if (r === 'ticket-sales') return v === 'ts-roster' || v === 'my-sales' || v === 'ticket-sales-dashboard';
         if (r === 'sales-officer') return ['sales-officer-dashboard', 'my-sales', 'ticket-sales-dashboard', 'ts-assignments', 'ts-expertise', 'history'].includes(v);
         if (r === 'operation-officer') return ['dashboard', 'counter', 'roster', 'assignments', 'reports', 'history'].includes(v);
         if (r === 'maintenance') return v === 'maintenance-dashboard' || v === 'cx-feedback';
-        if (r === 'cx') return v === 'cx-feedback' || v === 'maintenance-dashboard';
+        if (r === 'cx') return v === 'cx-feedback';
         return true;
     }, []);
 
@@ -161,12 +170,27 @@ const AppContent: React.FC = () => {
         onConfirm: () => {},
     });
 
+    // Close any active modal or presentation slide whenever an issue is reported
+    useEffect(() => {
+        const handleIssueAlert = () => {
+            setModal(null);
+        };
+        window.addEventListener('tfw-live-issue-alert', handleIssueAlert);
+        window.addEventListener('tfw:new-issue-reported', handleIssueAlert);
+        return () => {
+            window.removeEventListener('tfw-live-issue-alert', handleIssueAlert);
+            window.removeEventListener('tfw:new-issue-reported', handleIssueAlert);
+        };
+    }, []);
+
     // Refs for detecting data updates
     const prevOperatorsRef = useRef<Operator[] | undefined>(undefined);
     const prevTicketSalesPersonnelRef = useRef<Operator[] | undefined>(undefined);
 
     // Firebase / Persistent Server Synced State
     const { data: dailyCounts, setData: setDailyCounts, isLoading: l1 } = useFirebaseSync<Record<string, Record<string, number>>>('data/dailyCounts', {});
+    const { data: dailyPackageCounts, setData: setDailyPackageCounts } = useFirebaseSync<Record<string, Record<string, number>>>('data/dailyPackageCounts', {});
+    const { data: dailyTicketCounts, setData: setDailyTicketCounts } = useFirebaseSync<Record<string, Record<string, number>>>('data/dailyTicketCounts', {});
     const { data: ticketSalesData, setData: setTicketSalesData, isLoading: l2 } = useFirebaseSync<Record<string, Record<string, number>>>('data/ticketSalesData', {});
     const { data: ridesData, setData: setRidesData, isLoading: l3 } = useFirebaseSync<Record<string, any>>('config/rides', RIDES);
     const { data: operatorsData, setData: setOperatorsData, isLoading: l4 } = useFirebaseSync<Record<string, any>>('config/operators', OPERATORS);
@@ -177,7 +201,7 @@ const AppContent: React.FC = () => {
     const { data: attendanceData, setData: setAttendanceData, isLoading: l9 } = useFirebaseSync<AttendanceData>('data/attendance', {});
     const { data: historyLogData, setData: setHistoryLogData, isLoading: l10 } = useFirebaseSync<Record<number, Omit<HistoryRecord, 'id'>>>('data/historyLog', {});
     const { data: packageSalesData, setData: setPackageSalesData, isLoading: l12 } = useFirebaseSync<PackageSalesData>('data/packageSales', {});
-    const { data: otherSalesCategories, setData: setOtherSalesCategories, isLoading: l11 } = useFirebaseSync<string[]>('config/otherSalesCategories', []);
+    const { data: rawOtherSalesCategories, setData: setRawOtherSalesCategories, isLoading: l11 } = useFirebaseSync<string[]>('config/otherSalesCategories', DEFAULT_OTHER_SALES_CATEGORIES);
     const { data: maintenanceTickets, setData: setMaintenanceTickets, isLoading: l13 } = useFirebaseSync<Record<string, Record<string, MaintenanceTicket>>>('data/maintenanceTickets', {});
     const { data: maintenancePersonnelData, setData: setMaintenancePersonnelData, isLoading: l14 } = useFirebaseSync<Record<string, any>>('config/maintenancePersonnel', MAINTENANCE_PERSONNEL);
     const { data: cxPersonnelData, setData: setCxPersonnelData } = useFirebaseSync<Record<string, any>>('config/cxPersonnel', CX_PERSONNEL);
@@ -202,6 +226,37 @@ const AppContent: React.FC = () => {
         }
     }, []);
 
+    const otherSalesCategories = useMemo<string[]>(() => {
+        if (!rawOtherSalesCategories || !Array.isArray(rawOtherSalesCategories) || rawOtherSalesCategories.length === 0) {
+            return DEFAULT_OTHER_SALES_CATEGORIES;
+        }
+        return rawOtherSalesCategories;
+    }, [rawOtherSalesCategories]);
+
+    const handleSaveOtherSalesCategories = useCallback((categories: string[]) => {
+        const cleaned = Array.from(new Set(categories.map(c => c.trim()).filter(Boolean)));
+        setRawOtherSalesCategories(cleaned);
+        if (isFirebaseConfigured) {
+            database.ref('config/otherSalesCategories').set(cleaned);
+        }
+    }, [isFirebaseConfigured, setRawOtherSalesCategories]);
+
+    const handleAddOtherSalesCategory = useCallback((categoryName: string) => {
+        const trimmed = categoryName.trim();
+        if (!trimmed) return;
+        const current = otherSalesCategories;
+        if (!current.some(c => c.toLowerCase() === trimmed.toLowerCase())) {
+            const updated = [...current, trimmed];
+            handleSaveOtherSalesCategories(updated);
+        }
+    }, [otherSalesCategories, handleSaveOtherSalesCategories]);
+
+    const handleDeleteOtherSalesCategory = useCallback((categoryName: string) => {
+        const current = otherSalesCategories;
+        const updated = current.filter(c => c.toLowerCase() !== categoryName.toLowerCase());
+        handleSaveOtherSalesCategories(updated);
+    }, [otherSalesCategories, handleSaveOtherSalesCategories]);
+
     // Find the latest recorded operational date across all collections
     const latestRecordedDate = useMemo(() => {
         return findLatestRecordedDate(
@@ -209,9 +264,12 @@ const AppContent: React.FC = () => {
             ticketSalesData,
             dailyAssignments,
             packageSalesData,
-            attendanceData
+            attendanceData,
+            maintenanceTickets,
+            dailyPackageCounts,
+            dailyTicketCounts
         );
-    }, [dailyCounts, ticketSalesData, dailyAssignments, packageSalesData, attendanceData]);
+    }, [dailyCounts, ticketSalesData, dailyAssignments, packageSalesData, attendanceData, maintenanceTickets, dailyPackageCounts, dailyTicketCounts]);
 
     // Persistent Active Date State
     const [selectedDate, setSelectedDateState] = useState<string>(() => {
@@ -246,6 +304,63 @@ const AppContent: React.FC = () => {
         }
     }, [appConfigData?.activeView, role, isViewAllowedForRole, currentView]);
 
+    // Play pleasant high-low notification chime when maintenance solves a reported issue
+    const playNotificationSound = useCallback(() => {
+        playSolvedIssueSound();
+    }, []);
+
+    // Watch for maintenance tickets:
+    // 1. New ticket created with status 'reported' -> chime for maintenance staff / active users
+    // 2. Ticket transitioned to 'solved' -> chime & alert for Games & Ride Associate (operator)
+    const prevMaintenanceTicketsRef = useRef<Map<string, string>>(new Map());
+    useEffect(() => {
+        if (!maintenanceTickets || typeof maintenanceTickets !== 'object') return;
+        const currentMap = new Map<string, { status: string; ticket: MaintenanceTicket }>();
+        Object.values(maintenanceTickets).forEach((dayTickets: any) => {
+            if (dayTickets && typeof dayTickets === 'object') {
+                Object.values(dayTickets).forEach((t: any) => {
+                    if (t && t.id && t.status) {
+                        currentMap.set(t.id, { status: t.status, ticket: t });
+                    }
+                });
+            }
+        });
+
+        if (prevMaintenanceTicketsRef.current.size > 0) {
+            currentMap.forEach(({ status, ticket }, id) => {
+                const prevStatus = prevMaintenanceTicketsRef.current.get(id);
+
+                // Case A: A new issue has arrived in 'reported' status
+                if (!prevStatus && status === 'reported') {
+                    // Play sound alert for maintenance, admin, or anyone monitoring issues
+                    playReportedIssueSound({ rideName: ticket.rideName, problem: ticket.problem });
+                    setModal(null);
+                    showNotification(
+                        `🔔 New Issue Reported: ${ticket.rideName || 'Assigned Ride'} - "${ticket.problem || 'Issue detected'}"`,
+                        'info',
+                        8000
+                    );
+                }
+
+                // Case B: Ticket solved by maintenance -> alert Games & Ride Associate
+                if (status === 'solved' && prevStatus && prevStatus !== 'solved') {
+                    if (role === 'operator') {
+                        playNotificationSound();
+                        showNotification(
+                            `🎉 Issue Resolved: Maintenance has solved the issue for ${ticket.rideName}! (${ticket.assignedToName || 'Maintenance Technician'})`,
+                            'success',
+                            6000
+                        );
+                    }
+                }
+            });
+        }
+
+        const nextStatusMap = new Map<string, string>();
+        currentMap.forEach(({ status }, id) => nextStatusMap.set(id, status));
+        prevMaintenanceTicketsRef.current = nextStatusMap;
+    }, [maintenanceTickets, role, showNotification, playNotificationSound, playReportedIssueSound]);
+
     const setSelectedDate = useCallback((newDate: string, syncGlobal: boolean = true) => {
         setSelectedDateState(newDate);
         window.localStorage.setItem('TFW_ACTIVE_DATE', newDate);
@@ -260,15 +375,10 @@ const AppContent: React.FC = () => {
     const handleBroadcastSync = useCallback(async () => {
         setIsBroadcastingSync(true);
         try {
-            // 1. Pull latest WhatsApp messages from group "Technical support TFW"
-            try {
-                await fetch('/api/whatsapp/sync-now', { method: 'POST' });
-            } catch (_) {}
-
-            // 2. Broadcast active date, current view, and state across mobile and desktop
+            // 1. Broadcast active date, current view, and state across mobile and desktop
             await database.syncViewEverywhere(selectedDate, currentView);
 
-            // 3. Pull latest full database snapshot immediately
+            // 2. Pull latest full database snapshot immediately
             await database.engine.fetchFullDatabase();
 
             showNotification(`✨ Mobile & Desktop Synced! View (${currentView}) and date (${selectedDate}) synchronized across all devices.`, 'success');
@@ -347,10 +457,41 @@ const AppContent: React.FC = () => {
     }, [cxPersonnelData]);
 
     const packages = useMemo<PackageItem[]>(() => {
-        if (!packagesData) return DEFAULT_PACKAGES;
-        if (Array.isArray(packagesData)) return packagesData;
-        return Object.entries(packagesData).map(([id, p]) => ({ id, ...(p as object) } as PackageItem));
+        let loadedList: PackageItem[] = [];
+        if (!packagesData) {
+            loadedList = DEFAULT_PACKAGES;
+        } else if (Array.isArray(packagesData)) {
+            loadedList = packagesData;
+        } else {
+            loadedList = Object.entries(packagesData).map(([id, p]) => ({ id, ...(p as object) } as PackageItem));
+        }
+
+        // Guarantee all DEFAULT_PACKAGES (including the weekend & Gov.Holiday packages) are always present
+        const existingNames = new Set(loadedList.map(p => (p.name || '').trim().toLowerCase()));
+        const merged = [...loadedList];
+        for (const defPkg of DEFAULT_PACKAGES) {
+            if (!existingNames.has(defPkg.name.trim().toLowerCase())) {
+                merged.push(defPkg);
+                existingNames.add(defPkg.name.trim().toLowerCase());
+            }
+        }
+        return merged;
     }, [packagesData]);
+
+    // Auto-sync any missing default packages to Firebase config/packages
+    useEffect(() => {
+        if (!packagesData || !isFirebaseConfigured) return;
+        const currentList = Array.isArray(packagesData) 
+            ? packagesData 
+            : Object.entries(packagesData).map(([id, p]) => ({ id, ...(p as object) } as PackageItem));
+        const currentNames = new Set(currentList.map(p => (p.name || '').trim().toLowerCase()));
+        const missing = DEFAULT_PACKAGES.filter(p => !currentNames.has(p.name.trim().toLowerCase()));
+        if (missing.length > 0) {
+            const merged = [...currentList, ...missing];
+            database.ref('config/packages').set(merged)
+                .catch(err => console.error("Failed to auto-sync missing default packages:", err));
+        }
+    }, [packagesData, isFirebaseConfigured]);
 
     const floors = useMemo<string[]>(() => {
         return floorsData && floorsData.length > 0 ? floorsData : FLOORS;
@@ -440,11 +581,27 @@ const AppContent: React.FC = () => {
 
     const ridesWithCounts = useMemo<RideWithCount[]>(() => {
         const countsForDate = dailyCounts[selectedDate] || {};
+        const pkgForDate = dailyPackageCounts[selectedDate] || {};
+        const tktForDate = dailyTicketCounts[selectedDate] || {};
         return rides.map(ride => {
             const val = countsForDate[ride.id] !== undefined ? countsForDate[ride.id] : countsForDate[String(ride.id)];
-            return { ...ride, count: Number(val) || 0 };
+            const pkg = pkgForDate[ride.id] !== undefined ? pkgForDate[ride.id] : pkgForDate[String(ride.id)];
+            const tkt = tktForDate[ride.id] !== undefined ? tktForDate[ride.id] : tktForDate[String(ride.id)];
+            const numVal = Number(val) || 0;
+            let pkgNum = Number(pkg) || 0;
+            let tktNum = Number(tkt) || 0;
+            if (pkgNum === 0 && tktNum === 0 && numVal > 0) {
+                pkgNum = numVal;
+            }
+            const sum = pkgNum + tktNum;
+            return { 
+                ...ride, 
+                count: sum,
+                packageCount: pkgNum,
+                ticketCount: tktNum
+            };
         });
-    }, [rides, dailyCounts, selectedDate]);
+    }, [rides, dailyCounts, dailyPackageCounts, dailyTicketCounts, selectedDate]);
 
     const countersWithSales = useMemo<CounterWithSales[]>(() => {
         const salesForSelected = ticketSalesData[selectedDate] || {};
@@ -458,7 +615,22 @@ const AppContent: React.FC = () => {
         ride.name.toLowerCase().includes(searchTerm.toLowerCase()) && (!selectedFloor || ride.floor === selectedFloor)
     ), [ridesWithCounts, searchTerm, selectedFloor]);
 
-    const totalGuests = useMemo(() => Object.values(dailyCounts[selectedDate] || {}).reduce((sum: number, count) => sum + (count as number), 0), [dailyCounts, selectedDate]);
+    const totalGuests = useMemo(() => {
+        const countsForDate = dailyCounts[selectedDate] || {};
+        const pkgForDate = dailyPackageCounts[selectedDate] || {};
+        const tktForDate = dailyTicketCounts[selectedDate] || {};
+        return rides.reduce((sum, ride) => {
+            const rawPkg = Number(pkgForDate[ride.id] ?? pkgForDate[String(ride.id)] ?? 0);
+            const rawTkt = Number(tktForDate[ride.id] ?? tktForDate[String(ride.id)] ?? 0);
+            const val = Number(countsForDate[ride.id] ?? countsForDate[String(ride.id)] ?? 0);
+            let pkg = rawPkg;
+            let tkt = rawTkt;
+            if (pkg === 0 && tkt === 0 && val > 0) {
+                pkg = val;
+            }
+            return sum + (pkg + tkt);
+        }, 0);
+    }, [rides, dailyCounts, dailyPackageCounts, dailyTicketCounts, selectedDate]);
     const totalSales = useMemo(() => Object.values(ticketSalesData[selectedDate] || {}).reduce((sum: number, count) => sum + (count as number), 0), [ticketSalesData, selectedDate]);
     const totalSalesAmount = useMemo(() => {
         const dayRecords = packageSalesData[selectedDate] || {};
@@ -577,6 +749,90 @@ const AppContent: React.FC = () => {
         }
     }, [dailyCounts, rides, selectedDate, logAction, showNotification]);
 
+    // Package-specific guest count handlers
+    const handlePackageCountChange = useCallback((rideId: number, newCount: number) => {
+        const rideName = rides.find(r => r.id === rideId)?.name || 'Unknown Ride';
+        const numCount = Math.max(0, Number(newCount) || 0);
+        if (isFirebaseConfigured) {
+            const currentTkt = Number(dailyTicketCounts[selectedDate]?.[rideId] ?? dailyTicketCounts[selectedDate]?.[String(rideId)] ?? 0);
+            const totalSum = numCount + currentTkt;
+            const updates: Record<string, number> = {};
+            updates[`data/dailyPackageCounts/${selectedDate}/${rideId}`] = numCount;
+            updates[`data/dailyCounts/${selectedDate}/${rideId}`] = totalSum;
+            database.ref().update(updates)
+                .then(() => {
+                    logAction('GUEST_PACKAGE_COUNT_UPDATE', `Set package guest count for '${rideName}' (${selectedDate}) to ${numCount}.`);
+                })
+                .catch(error => {
+                    console.error("Firebase package count update failed:", error);
+                    showNotification('Failed to save package count.', 'error');
+                });
+        }
+    }, [rides, selectedDate, dailyTicketCounts, logAction, showNotification]);
+
+    const handleIncrementPackageCount = useCallback((rideId: number, delta: number) => {
+        const rideName = rides.find(r => r.id === rideId)?.name || 'Unknown Ride';
+        if (isFirebaseConfigured) {
+            const currentPkg = Number(dailyPackageCounts[selectedDate]?.[rideId] ?? dailyPackageCounts[selectedDate]?.[String(rideId)] ?? 0);
+            const currentTkt = Number(dailyTicketCounts[selectedDate]?.[rideId] ?? dailyTicketCounts[selectedDate]?.[String(rideId)] ?? 0);
+            const newPkg = Math.max(0, currentPkg + delta);
+            const totalSum = newPkg + currentTkt;
+            const updates: Record<string, number> = {};
+            updates[`data/dailyPackageCounts/${selectedDate}/${rideId}`] = newPkg;
+            updates[`data/dailyCounts/${selectedDate}/${rideId}`] = totalSum;
+            database.ref().update(updates)
+                .then(() => {
+                    logAction('GUEST_PACKAGE_COUNT_INCREMENT', `Incremented package count for '${rideName}' (${selectedDate}) by ${delta > 0 ? `+${delta}` : delta}.`);
+                })
+                .catch(error => {
+                    console.error("Increment package count failed:", error);
+                    showNotification('Failed to update package count.', 'error');
+                });
+        }
+    }, [rides, selectedDate, dailyPackageCounts, dailyTicketCounts, logAction, showNotification]);
+
+    // Ticket-specific guest count handlers
+    const handleTicketCountChange = useCallback((rideId: number, newCount: number) => {
+        const rideName = rides.find(r => r.id === rideId)?.name || 'Unknown Ride';
+        const numCount = Math.max(0, Number(newCount) || 0);
+        if (isFirebaseConfigured) {
+            const currentPkg = Number(dailyPackageCounts[selectedDate]?.[rideId] ?? dailyPackageCounts[selectedDate]?.[String(rideId)] ?? 0);
+            const totalSum = currentPkg + numCount;
+            const updates: Record<string, number> = {};
+            updates[`data/dailyTicketCounts/${selectedDate}/${rideId}`] = numCount;
+            updates[`data/dailyCounts/${selectedDate}/${rideId}`] = totalSum;
+            database.ref().update(updates)
+                .then(() => {
+                    logAction('GUEST_TICKET_COUNT_UPDATE', `Set ticket guest count for '${rideName}' (${selectedDate}) to ${numCount}.`);
+                })
+                .catch(error => {
+                    console.error("Firebase ticket count update failed:", error);
+                    showNotification('Failed to save ticket count.', 'error');
+                });
+        }
+    }, [rides, selectedDate, dailyPackageCounts, logAction, showNotification]);
+
+    const handleIncrementTicketCount = useCallback((rideId: number, delta: number) => {
+        const rideName = rides.find(r => r.id === rideId)?.name || 'Unknown Ride';
+        if (isFirebaseConfigured) {
+            const currentPkg = Number(dailyPackageCounts[selectedDate]?.[rideId] ?? dailyPackageCounts[selectedDate]?.[String(rideId)] ?? 0);
+            const currentTkt = Number(dailyTicketCounts[selectedDate]?.[rideId] ?? dailyTicketCounts[selectedDate]?.[String(rideId)] ?? 0);
+            const newTkt = Math.max(0, currentTkt + delta);
+            const totalSum = currentPkg + newTkt;
+            const updates: Record<string, number> = {};
+            updates[`data/dailyTicketCounts/${selectedDate}/${rideId}`] = newTkt;
+            updates[`data/dailyCounts/${selectedDate}/${rideId}`] = totalSum;
+            database.ref().update(updates)
+                .then(() => {
+                    logAction('GUEST_TICKET_COUNT_INCREMENT', `Incremented ticket count for '${rideName}' (${selectedDate}) by ${delta > 0 ? `+${delta}` : delta}.`);
+                })
+                .catch(error => {
+                    console.error("Increment ticket count failed:", error);
+                    showNotification('Failed to update ticket count.', 'error');
+                });
+        }
+    }, [rides, selectedDate, dailyPackageCounts, dailyTicketCounts, logAction, showNotification]);
+
     // Atomic increment for ticket counter sales
     const handleIncrementSales = useCallback((counterId: number, delta: number) => {
         const counterName = counters.find(c => c.id === counterId)?.name || 'Unknown Counter';
@@ -619,7 +875,11 @@ const AppContent: React.FC = () => {
             confirmVariant: 'danger',
             onConfirm: () => {
                 if (isFirebaseConfigured) {
-                    database.ref(`data/dailyCounts/${selectedDate}`).remove()
+                    const updates: { [key: string]: null } = {};
+                    updates[`data/dailyCounts/${selectedDate}`] = null;
+                    updates[`data/dailyPackageCounts/${selectedDate}`] = null;
+                    updates[`data/dailyTicketCounts/${selectedDate}`] = null;
+                    database.ref().update(updates)
                         .then(() => {
                             logAction('RESET_GUEST_COUNTS', `Reset all guest counts for ${selectedDate}.`);
                             showNotification('Guest counts have been reset to zero.', 'info');
@@ -759,7 +1019,7 @@ const AppContent: React.FC = () => {
                     setTicketSalesPersonnelData(backupData.config.ticketSalesPersonnelData || {});
                     setCountersData(backupData.config.countersData || {});
                     handleLogoChange(backupData.config.appLogo || null);
-                    setOtherSalesCategories(backupData.config.otherSalesCategories || []);
+                    handleSaveOtherSalesCategories(backupData.config.otherSalesCategories || []);
                     setMaintenancePersonnelData(backupData.config.maintenancePersonnelData || {});
                     if (backupData.config.packagesData) setPackagesData(backupData.config.packagesData);
                     if (backupData.config.floorsData) setFloorsData(backupData.config.floorsData);
@@ -797,6 +1057,8 @@ const AppContent: React.FC = () => {
                 if (isFirebaseConfigured) {
                     const pathsToDelete = [
                         `data/dailyCounts/${dateToReset}`,
+                        `data/dailyPackageCounts/${dateToReset}`,
+                        `data/dailyTicketCounts/${dateToReset}`,
                         `data/ticketSalesData/${dateToReset}`,
                         `data/operatorAssignments/${dateToReset}`,
                         `data/ticketSalesAssignments/${dateToReset}`,
@@ -840,6 +1102,21 @@ const AppContent: React.FC = () => {
         showNotification('Ticket sales assignments saved!', 'success');
     }, [logAction, showNotification]);
 
+    const handleSaveManagementNotes = useCallback(async (date: string, notes: ManagementSummaryNotes) => {
+        setAppConfigData((prev: AppConfig) => ({
+            ...prev,
+            managementNotes: {
+                ...(prev?.managementNotes || {}),
+                [date]: notes
+            }
+        }));
+        if (isFirebaseConfigured) {
+            await database.ref(`config/appConfig/managementNotes/${date}`).set(notes);
+            logAction('SAVE_MANAGEMENT_NOTES', `Management summary notes and sales counts updated for ${date}.`);
+            showNotification('Management summary saved!', 'success');
+        }
+    }, [isFirebaseConfigured, setAppConfigData, logAction, showNotification]);
+
     const handleClearHistory = () => {
         setConfirmDialog({
             isOpen: true,
@@ -864,16 +1141,26 @@ const AppContent: React.FC = () => {
         feedbackCategory?: string,
         priority?: 'normal' | 'high' | 'urgent',
         guestDetails?: string,
-        source?: string
+        source?: string,
+        dateOverride?: string,
+        targetDepartment?: string
     ) => {
-        if (!currentUser || !isFirebaseConfigured || !problem.trim()) return;
+        if (!isFirebaseConfigured || !problem.trim()) return Promise.resolve();
 
         const ride = rides.find(r => r.id === rideId);
-        if (!ride) return;
+        if (!ride) return Promise.resolve();
 
         const now = new Date();
-        const ticketDate = getLocalDateString(now);
+        const ticketDate = dateOverride || getLocalDateString(now);
         const ticketId = `${ticketDate}-${rideId}-${Date.now()}`;
+        const isCX = role === 'cx' || source === 'cx';
+
+        const submitterId = currentUser?.id || Date.now();
+        const submitterName = currentUser?.name || (isCX ? 'Customer Experience (CX)' : 'Games & Ride Associate');
+        const submitterRole = isCX 
+            ? 'Customer Experience (CX)' 
+            : (currentUser?.role === 'operator' ? 'Games & Ride Associate' : (currentUser?.role || 'Games & Ride Associate'));
+
         const newTicket: MaintenanceTicket = {
             id: ticketId,
             date: ticketDate,
@@ -881,22 +1168,30 @@ const AppContent: React.FC = () => {
             rideName: ride.name,
             problem: problem.trim(),
             status: 'reported',
-            reportedById: currentUser.id,
-            reportedByName: currentUser.name,
-            reportedByRole: currentUser.role || (role === 'cx' ? 'Customer Experience (CX)' : role),
-            source: source || (role === 'cx' ? 'cx' : 'operator'),
-            feedbackCategory: feedbackCategory || (role === 'cx' ? 'Customer Feedback' : 'Operational Issue'),
+            reportedById: submitterId,
+            reportedByName: submitterName,
+            reportedByRole: submitterRole,
+            source: isCX ? 'cx' : (source || 'operator'),
+            feedbackCategory: feedbackCategory || (isCX ? 'Guest Comfort & Seating' : 'Operational Issue'),
             priority: priority || 'normal',
             guestDetails: guestDetails || undefined,
             reportedAt: now.toISOString(),
+            targetDepartment: targetDepartment || (isCX ? 'both' : undefined),
         };
 
-        database.ref(`data/maintenanceTickets/${ticketDate}/${ticketId}`).set(newTicket)
+        return database.ref(`data/maintenanceTickets/${ticketDate}/${ticketId}`).set(newTicket)
             .then(() => {
-                logAction('MAINTENANCE_REPORT', `[${(newTicket.source || 'REPORT').toUpperCase()}] ${ride.name}: ${problem.trim()}`);
-                showNotification('Problem / Customer Feedback submitted to Maintenance!', 'success');
+                logAction('MAINTENANCE_REPORT', `[${isCX ? 'Customer Experience (CX)' : 'REPORT'}] ${ride.name}: ${problem.trim()}`);
+                // Provide immediate audible feedback to the reporting user as well
+                playReportedIssueSound({ rideName: ride.name, problem: problem.trim() });
+                showNotification(
+                    isCX 
+                        ? 'Customer Feedback dispatched to Operation Officer & Sales Executive!'
+                        : `Issue for ${ride.name} reported to Maintenance Dashboard in Reported Issues (Associates)!`, 
+                    'success'
+                );
             });
-    }, [currentUser, selectedDate, rides, role, logAction, showNotification]);
+    }, [currentUser, rides, role, logAction, showNotification]);
 
     const handleUpdateTicketStatus = useCallback((
         ticket: MaintenanceTicket, 
@@ -918,6 +1213,7 @@ const AppContent: React.FC = () => {
         }
         if (newStatus === 'in-progress') {
             updates.inProgressAt = new Date().toISOString();
+            updates.solvedAt = undefined;
             if (technician) {
                 updates.assignedToId = technician.id;
                 updates.assignedToName = technician.name;
@@ -956,7 +1252,8 @@ const AppContent: React.FC = () => {
             updates.resolutionNotes = undefined;
         }
 
-        database.ref(`data/maintenanceTickets/${ticket.date}/${ticket.id}`).update(updates)
+        const ticketTargetDate = ticket.date || (ticket as any)._dateKey || selectedDate;
+        database.ref(`data/maintenanceTickets/${ticketTargetDate}/${ticket.id}`).update(updates)
             .then(() => {
                 const techTitle = technician ? technician.name : 'Team';
                 logAction('MAINTENANCE_UPDATE', `${techTitle} updated status for ${ticket.rideName} to ${newStatus}.`);
@@ -989,25 +1286,6 @@ const AppContent: React.FC = () => {
                     });
                 }
             });
-        }
-
-        // Post resolution notification to WhatsApp group if solved
-        if (newStatus === 'solved') {
-            fetch('/api/whatsapp/send-ticket-update', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    ticketId: ticket.id,
-                    rideName: ticket.rideName,
-                    action: 'solved',
-                    technicianName: technician?.name || ticket.assignedToName || 'Maintenance Team',
-                    helpers: helpers?.map(h => h.name) || ticket.helperNames || [],
-                    notes: notes || ticket.resolutionNotes || 'Repaired and cleared for operational use.',
-                    reportedProblem: ticket.problem,
-                    solvedAt: updates.solvedAt || new Date().toISOString(),
-                    photoData: solutionImageUrl || ticket.solutionImageUrl || ticket.photoUrl
-                })
-            }).catch(() => {});
         }
     }, [logAction, showNotification, maintenanceTickets]);
 
@@ -1151,6 +1429,43 @@ const AppContent: React.FC = () => {
             }
         });
     }, [isFirebaseConfigured, logAction, showNotification, setMaintenanceTickets]);
+
+    const handleClearAllMaintenanceRecords = useCallback(() => {
+        setConfirmDialog({
+            isOpen: true,
+            title: 'Clear All Maintenance Records',
+            message: 'Are you sure you want to clear ALL maintenance issue records and start newly from today? All past issues and resolved records will be wiped.',
+            confirmLabel: 'Clear All Records (Start Newly)',
+            confirmVariant: 'danger',
+            onConfirm: async () => {
+                try {
+                    await fetch('/api/maintenance/clear-all', { method: 'POST' });
+                } catch (_) {}
+                setMaintenanceTickets({});
+                try {
+                    database.ref('data/maintenanceTickets').set({});
+                    localStorage.removeItem('tfw_cache_data/maintenanceTickets');
+                } catch (_) {}
+                logAction('MAINTENANCE_UPDATE', 'Cleared all maintenance records to start newly from today');
+                showNotification('All maintenance issue records cleared. Starting fresh from today!', 'success');
+            }
+        });
+    }, [logAction, showNotification, setMaintenanceTickets]);
+
+    const handleUploadSolvedTickets = useCallback((uploadedTickets: MaintenanceTicket[]) => {
+        if (!uploadedTickets || uploadedTickets.length === 0) return;
+        setMaintenanceTickets((prev: Record<string, Record<string, MaintenanceTicket>>) => {
+            const updated = { ...(prev || {}) };
+            uploadedTickets.forEach(t => {
+                const dateKey = t.date || selectedDate;
+                if (!updated[dateKey]) updated[dateKey] = {};
+                updated[dateKey][t.id] = { ...t, status: 'solved' };
+                database.ref(`data/maintenanceTickets/${dateKey}/${t.id}`).set({ ...t, status: 'solved' });
+            });
+            return updated;
+        });
+        showNotification(`Successfully uploaded and saved ${uploadedTickets.length} solved record(s).`, 'success');
+    }, [selectedDate, showNotification, setMaintenanceTickets]);
 
     // --- Admin Entity Modification Handlers ---
     const handleSaveRide = useCallback((ride: Ride) => {
@@ -1555,7 +1870,15 @@ const AppContent: React.FC = () => {
                     />
                 );
             case 'reports': 
-                return <Reports dailyCounts={dailyCounts} rides={rides} />;
+                return (
+                    <Reports 
+                        selectedDate={selectedDate}
+                        dailyCounts={dailyCounts} 
+                        dailyPackageCounts={dailyPackageCounts}
+                        dailyTicketCounts={dailyTicketCounts}
+                        rides={rides} 
+                    />
+                );
             case 'assignments': 
                 return (
                     <AssignmentView 
@@ -1575,13 +1898,30 @@ const AppContent: React.FC = () => {
             case 'roster':
                 const ridesForRoster = rides.map(ride => {
                     const val = dailyCounts[selectedDate]?.[ride.id] !== undefined ? dailyCounts[selectedDate]?.[ride.id] : dailyCounts[selectedDate]?.[String(ride.id)];
-                    return { ...ride, count: Number(val) || 0 };
+                    const pkgVal = dailyPackageCounts[selectedDate]?.[ride.id] !== undefined ? dailyPackageCounts[selectedDate]?.[ride.id] : dailyPackageCounts[selectedDate]?.[String(ride.id)];
+                    const tktVal = dailyTicketCounts[selectedDate]?.[ride.id] !== undefined ? dailyTicketCounts[selectedDate]?.[ride.id] : dailyTicketCounts[selectedDate]?.[String(ride.id)];
+                    const numVal = Number(val) || 0;
+                    let numPkg = Number(pkgVal) || 0;
+                    let numTkt = Number(tktVal) || 0;
+                    if (numPkg === 0 && numTkt === 0 && numVal > 0) {
+                        numPkg = numVal;
+                    }
+                    const totalSum = numPkg + numTkt;
+                    return { 
+                        ...ride, 
+                        count: totalSum,
+                        packageCount: numPkg,
+                        ticketCount: numTkt
+                    };
                 });
                 return (
                     <DailyRoster 
                         rides={ridesForRoster} 
                         operators={operators} 
                         dailyAssignments={dailyAssignments} 
+                        dailyCounts={dailyCounts}
+                        dailyPackageCounts={dailyPackageCounts}
+                        dailyTicketCounts={dailyTicketCounts}
                         selectedDate={selectedDate} 
                         onDateChange={setSelectedDate} 
                         role={role} 
@@ -1589,8 +1929,14 @@ const AppContent: React.FC = () => {
                         attendance={attendanceArray} 
                         onNavigate={handleNavigate} 
                         onCountChange={handleCountChange} 
-                        onIncrementCount={handleIncrementCount} 
+                        onIncrementCount={handleIncrementCount}
+                        onPackageCountChange={handlePackageCountChange}
+                        onIncrementPackageCount={handleIncrementPackageCount}
+                        onTicketCountChange={handleTicketCountChange}
+                        onIncrementTicketCount={handleIncrementTicketCount}
                         onShowModal={handleShowModal} 
+                        onReportProblem={handleReportProblem}
+                        maintenanceTickets={maintenanceTickets}
                         hasCheckedInToday={hasCheckedInToday} 
                         onClockIn={handleClockIn} 
                         isCheckinAllowed={isCheckinAllowed} 
@@ -1683,8 +2029,10 @@ const AppContent: React.FC = () => {
                         currency={appConfig.currency}
                         ticketSalesPersonnel={ticketSalesPersonnel}
                         role={role}
+                        onAddCategory={handleAddOtherSalesCategory}
                     />
                 );
+            case 'other-sales-categories':
             case 'sales-officer-dashboard': 
                 return (
                     <SalesOfficerDashboard 
@@ -1700,6 +2048,13 @@ const AppContent: React.FC = () => {
                         currency={appConfig.currency}
                         availablePackages={packages}
                         currentUser={currentUser}
+                        onSaveOtherSalesCategories={handleSaveOtherSalesCategories}
+                        onAddOtherSalesCategory={handleAddOtherSalesCategory}
+                        onDeleteOtherSalesCategory={handleDeleteOtherSalesCategory}
+                        initialTab={currentView === 'other-sales-categories' ? 'category-wise' : 'records'}
+                        onNavigate={handleNavigate}
+                        maintenanceTickets={maintenanceTickets}
+                        onUpdateTicketStatus={handleUpdateTicketStatus}
                     />
                 );
             case 'maintenance-dashboard': 
@@ -1712,34 +2067,108 @@ const AppContent: React.FC = () => {
                         maintenancePersonnel={maintenancePersonnel} 
                         onClearSolved={handleClearSolvedTickets} 
                         onClearReported={handleClearReportedTickets}
+                        onClearAllRecords={handleClearAllMaintenanceRecords}
+                        onUploadSolvedTickets={handleUploadSolvedTickets}
                         onDeleteTicket={handleDeleteTicket}
                         rides={rides} 
                         onReportProblem={handleReportProblem}
                         portalType="rides"
                         role={role}
                         onSwitchPortal={(p) => handleNavigate(p === 'cx' ? 'cx-feedback' : 'maintenance-dashboard')}
+                        onShowModal={handleShowModal}
                     />
                 );
             case 'cx-feedback':
+                // If user is in Maintenance role, show the Customer Experience (CX) Maintenance dashboard
+                if (role === 'maintenance') {
+                    return (
+                        <MaintenanceDashboard 
+                            maintenanceTickets={maintenanceTickets} 
+                            selectedDate={selectedDate} 
+                            onDateChange={setSelectedDate} 
+                            onUpdateTicketStatus={handleUpdateTicketStatus} 
+                            maintenancePersonnel={maintenancePersonnel} 
+                            onClearSolved={handleClearSolvedTickets} 
+                            onClearReported={handleClearReportedTickets}
+                            onClearAllRecords={handleClearAllMaintenanceRecords}
+                            onUploadSolvedTickets={handleUploadSolvedTickets}
+                            onDeleteTicket={handleDeleteTicket}
+                            rides={rides} 
+                            onReportProblem={handleReportProblem}
+                            portalType="cx"
+                            role={role}
+                            onSwitchPortal={(p) => handleNavigate(p === 'cx' ? 'cx-feedback' : 'maintenance-dashboard')}
+                            onShowModal={handleShowModal}
+                        />
+                    );
+                }
                 return (
-                    <MaintenanceDashboard 
-                        maintenanceTickets={maintenanceTickets} 
-                        selectedDate={selectedDate} 
-                        onDateChange={setSelectedDate} 
-                        onUpdateTicketStatus={handleUpdateTicketStatus} 
-                        maintenancePersonnel={maintenancePersonnel} 
-                        onClearSolved={handleClearSolvedTickets} 
-                        onClearReported={handleClearReportedTickets}
-                        onDeleteTicket={handleDeleteTicket}
-                        rides={rides} 
-                        onReportProblem={handleReportProblem}
-                        portalType="cx"
+                    <CustomerExperienceView 
+                        rides={rides}
+                        currentUser={currentUser}
                         role={role}
-                        onSwitchPortal={(p) => handleNavigate(p === 'cx' ? 'cx-feedback' : 'maintenance-dashboard')}
+                        selectedDate={selectedDate}
+                        onDateChange={setSelectedDate}
+                        maintenanceTickets={maintenanceTickets}
+                        onReportProblem={handleReportProblem}
+                        onUpdateTicketStatus={handleUpdateTicketStatus}
+                        onNavigate={handleNavigate}
+                        onBroadcastSync={handleBroadcastSync}
+                        isBroadcastingSync={isBroadcastingSync}
+                        onShowModal={handleShowModal}
+                    />
+                );
+
+            case 'management-summary':
+                return (
+                    <ManagementSummaryView 
+                        rides={rides}
+                        dailyCounts={dailyCounts}
+                        dailyPackageCounts={dailyPackageCounts}
+                        dailyTicketCounts={dailyTicketCounts}
+                        dailyAssignments={dailyAssignments}
+                        ticketSalesData={ticketSalesData}
+                        packageSalesData={packageSalesData}
+                        packages={packages}
+                        attendanceData={attendanceData}
+                        operators={operators}
+                        counters={counters}
+                        maintenanceTickets={maintenanceTickets}
+                        selectedDate={selectedDate}
+                        today={today}
+                        onDateChange={setSelectedDate}
+                        managementNotes={appConfigData?.managementNotes}
+                        onSaveManagementNotes={handleSaveManagementNotes}
+                        currentUser={currentUser}
                     />
                 );
             
             case 'counter': default: 
+                if (role === 'operation-officer') {
+                    return (
+                        <OperationOfficerRideView 
+                            rides={rides}
+                            dailyCounts={dailyCounts}
+                            dailyPackageCounts={dailyPackageCounts}
+                            dailyTicketCounts={dailyTicketCounts}
+                            selectedDate={selectedDate}
+                            today={today}
+                            onDateChange={setSelectedDate}
+                            onCountChange={handleCountChange}
+                            onIncrementCount={handleIncrementCount}
+                            onPackageCountChange={handlePackageCountChange}
+                            onIncrementPackageCount={handleIncrementPackageCount}
+                            onTicketCountChange={handleTicketCountChange}
+                            onIncrementTicketCount={handleIncrementTicketCount}
+                            role={role}
+                            onChangePicture={(ride) => handleShowModal('edit-image', ride)}
+                            floors={floors}
+                            maintenanceTickets={maintenanceTickets}
+                            currentUser={currentUser}
+                            onUpdateTicketStatus={handleUpdateTicketStatus}
+                        />
+                    );
+                }
                 return (
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
                         {filteredRides.map(ride => (
@@ -1828,6 +2257,12 @@ const AppContent: React.FC = () => {
                     onResetDay={handleResetDay} 
                     appLogo={appLogo} 
                     onLogoChange={handleLogoChange} 
+                />
+            )}
+            {modal === 'share' && (
+                <ShareModal 
+                    onClose={() => setModal(null)} 
+                    appName={appConfig.appName} 
                 />
             )}
             {modal === 'admin-manager' && role === 'admin' && (

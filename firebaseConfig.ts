@@ -11,6 +11,7 @@ import {
   DEFAULT_PACKAGES,
   DEFAULT_APP_CONFIG
 } from './constants';
+import { playReportedIssueSound } from './utils/soundAlerts';
 
 export const isFirebaseConfigured = true; // Local SQLite database persistence is active
 export const isDatabaseConfigured = true;
@@ -30,13 +31,7 @@ export const DEFAULT_DELETED_WA_MSG_IDS: string[] = [
   'AC01468942F9A7C2C8584955E3FD1EA8'
 ];
 
-export const DEFAULT_DELETED_SIGNATURES: string[] = [
-  'ride-101-level17paintballbunkerneedsair',
-  'level17paintballbunkerneedsair',
-  'paintballbunkerneedsairrefill',
-  'bunkerneedsairrefill',
-  'level17paintballbunker'
-];
+export const DEFAULT_DELETED_SIGNATURES: string[] = [];
 
 type ValueCallback = (snapshot: { val: () => any }) => void;
 
@@ -130,7 +125,8 @@ class ServerDatabaseEngine {
         this.isServerApiAvailable = true;
         this.fetchFullDatabase();
         this.checkServerVersion();
-        if (!this.isSseConnected || !this.sse || this.sse.readyState !== EventSource.OPEN || (Date.now() - this.lastSsePingTime > 12000)) {
+        this.flushOfflineQueue();
+        if (!this.isSseConnected || !this.sse || this.sse.readyState !== EventSource.OPEN || (Date.now() - this.lastSsePingTime > 10000)) {
           this.connectStream();
         }
       };
@@ -141,6 +137,19 @@ class ServerDatabaseEngine {
           handleMobileResume();
         }
       });
+      // Mobile screen touch / interaction wake check
+      let lastMobileTouchCheck = 0;
+      const handleMobileTouchActivity = () => {
+        const now = Date.now();
+        if (now - lastMobileTouchCheck > 8000) {
+          lastMobileTouchCheck = now;
+          if (!this.isSseConnected || !this.sse || this.sse.readyState !== EventSource.OPEN || (now - this.lastSsePingTime > 10000)) {
+            handleMobileResume();
+          }
+        }
+      };
+      window.addEventListener('touchstart', handleMobileTouchActivity, { passive: true });
+      window.addEventListener('pointerdown', handleMobileTouchActivity, { passive: true });
       // Cross-tab storage event listener
       window.addEventListener('storage', (e) => {
         if (e.key === 'TFW_PERSISTENT_DB' && e.newValue) {
@@ -243,16 +252,6 @@ class ServerDatabaseEngine {
         if (dsClean.length >= 8 && (normProb.includes(dsClean) || dsClean.includes(normProb.slice(0, 25)))) {
           return true;
         }
-      }
-
-      // Hardened check for known deleted issue patterns
-      if (
-        normProb.includes('paintballbunkerneedsair') ||
-        normProb.includes('bunkerneedsairrefill') ||
-        normProb.includes('level17paintballbunker') ||
-        normProb.includes('paintballbunker')
-      ) {
-        return true;
       }
     }
     return false;
@@ -657,6 +656,21 @@ class ServerDatabaseEngine {
       return;
     }
 
+    // High-priority operational issue alert: play sound and notify across all connected devices
+    if (msg.type === 'issue-reported') {
+      const ticket = msg.ticket || msg.value || msg;
+      try {
+        playReportedIssueSound(ticket);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('tfw:new-issue-reported', { detail: ticket }));
+        }
+      } catch (_) {}
+      if (msg.senderId && msg.senderId === this.clientId) {
+        if (msg.version) this.dbVersion = Math.max(this.dbVersion, msg.version);
+        return;
+      }
+    }
+
     // Echo suppression: If this client initiated the mutation, local cache was already optimistically updated
     if (msg.senderId && msg.senderId === this.clientId) {
       if (msg.version) this.dbVersion = Math.max(this.dbVersion, msg.version);
@@ -677,6 +691,14 @@ class ServerDatabaseEngine {
           this.notifyPathListeners(path);
           if (path.startsWith('data/maintenanceTickets')) {
             this.notifyPathListeners('data/maintenanceTickets');
+            if (value && typeof value === 'object' && (value as any).status === 'reported') {
+              try {
+                playReportedIssueSound(value);
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(new CustomEvent('tfw:new-issue-reported', { detail: value }));
+                }
+              } catch (_) {}
+            }
           }
           if (path.startsWith('config')) {
             this.notifyPathListeners('config');
@@ -708,6 +730,16 @@ class ServerDatabaseEngine {
           changedPaths.forEach(p => this.notifyPathListeners(p));
           if (changedPaths.some(p => p.startsWith('data/maintenanceTickets'))) {
             this.notifyPathListeners('data/maintenanceTickets');
+            for (const [p, val] of Object.entries(updates)) {
+              if (p.startsWith('data/maintenanceTickets') && val && typeof val === 'object' && (val as any).status === 'reported') {
+                try {
+                  playReportedIssueSound(val);
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('tfw:new-issue-reported', { detail: val }));
+                  }
+                } catch (_) {}
+              }
+            }
           }
           if (changedPaths.some(p => p.startsWith('config'))) {
             this.notifyPathListeners('config');

@@ -1,7 +1,8 @@
 import React from 'react';
 import { Role } from '../hooks/useAuth';
 import { Operator, AppConfig } from '../types';
-import { Sliders, Database, LogOut, Search, Activity, User, Shield, Sparkles, Code, Radio, RefreshCw } from 'lucide-react';
+import { Sliders, Database, LogOut, Search, Activity, User, Shield, Sparkles, Code, Radio, RefreshCw, QrCode, Volume2, VolumeX } from 'lucide-react';
+import { isSoundMuted, setSoundMuted, unlockAudio, playReportedIssueSound } from '../utils/soundAlerts';
 
 interface Props {
   onSearch: (term: string) => void;
@@ -47,6 +48,19 @@ const Header: React.FC<Props> = ({
     ? 'Bashundhara City Development Ltd' 
     : appConfig.loginRightTitle;
 
+  const [soundMuted, setLocalSoundMuted] = React.useState<boolean>(() => isSoundMuted());
+
+  const handleToggleSound = () => {
+    unlockAudio();
+    const nextMuted = !soundMuted;
+    setLocalSoundMuted(nextMuted);
+    setSoundMuted(nextMuted);
+    if (!nextMuted) {
+      // Play a quick chime to verify sound is working
+      playReportedIssueSound({ rideName: 'Sound System', problem: 'Audio alert verified' });
+    }
+  };
+
   return (
     <>
       {announcementText && (
@@ -63,11 +77,13 @@ const Header: React.FC<Props> = ({
             <div 
               className="flex items-center gap-3 cursor-pointer" 
               onClick={() => {
-                if (role === 'sales-officer') onNavigate('sales-officer-dashboard');
+                if (role === 'management') onNavigate('management-summary');
+                else if (role === 'sales-officer') onNavigate('sales-officer-dashboard');
                 else if (role === 'ticket-sales') onNavigate('ts-roster');
                 else if (role === 'operator') onNavigate('roster');
                 else if (role === 'maintenance') onNavigate('maintenance-dashboard');
                 else if (role === 'cx') onNavigate('cx-feedback');
+                else if (role === 'operation-officer') onNavigate('counter');
                 else onNavigate('dashboard');
               }}
             >
@@ -114,6 +130,24 @@ const Header: React.FC<Props> = ({
 
           {/* Quick Actions on Mobile */}
           <div className="flex md:hidden items-center gap-1.5">
+            {/* Audio notifications toggle on mobile */}
+            <button
+              onClick={handleToggleSound}
+              className={`flex items-center gap-1 px-2 py-1.5 rounded-xl text-xs font-bold border transition-all shadow-sm active:scale-95 ${
+                soundMuted
+                  ? 'bg-gray-800 text-gray-400 border-gray-700'
+                  : 'bg-amber-600/25 text-amber-300 border-amber-500/40'
+              }`}
+              title={soundMuted ? 'Sound notifications are muted. Tap to enable audible alerts.' : 'Sound notifications active. Tap to mute.'}
+            >
+              {soundMuted ? (
+                <VolumeX className="w-3.5 h-3.5 text-gray-400" />
+              ) : (
+                <Volume2 className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+              )}
+              <span className="text-[10px] font-bold">{soundMuted ? 'Muted' : 'Sound ON'}</span>
+            </button>
+
             {onBroadcastSync && (
               <button
                 onClick={onBroadcastSync}
@@ -153,6 +187,24 @@ const Header: React.FC<Props> = ({
 
         {/* Action Controls & User */}
         <div className="flex items-center gap-2 sm:gap-3 w-full md:w-auto justify-end">
+          {/* Audio Notifications Button (Desktop) */}
+          <button
+            onClick={handleToggleSound}
+            className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl text-xs font-bold border transition-all shadow-sm cursor-pointer active:scale-95 ${
+              soundMuted
+                ? 'bg-gray-800 hover:bg-gray-750 text-gray-400 border-gray-700'
+                : 'bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border-amber-500/30'
+            }`}
+            title={soundMuted ? 'Sound notifications are muted. Click to turn sound ON.' : 'Sound notifications active for reported issues. Click to mute or test sound.'}
+          >
+            {soundMuted ? (
+              <VolumeX className="w-3.5 h-3.5 text-gray-400" />
+            ) : (
+              <Volume2 className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+            )}
+            <span className="text-[11px] sm:text-xs hidden sm:inline">{soundMuted ? 'Sound Muted' : 'Sound Alerts'}</span>
+          </button>
+
           {/* Universal Sync Mobile & Desktop button */}
           {onBroadcastSync && (
             <button
@@ -163,6 +215,18 @@ const Header: React.FC<Props> = ({
             >
               <Radio className={`w-3.5 h-3.5 text-emerald-400 ${isBroadcastingSync ? 'animate-ping' : ''}`} />
               <span className="text-[11px] sm:text-xs">{isBroadcastingSync ? 'Syncing...' : 'Sync Mobile & Desktop'}</span>
+            </button>
+          )}
+
+          {/* Mobile Web Access / QR Code button */}
+          {onShowModal && (
+            <button
+              onClick={() => onShowModal('share')}
+              className="flex items-center gap-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl text-xs font-bold border border-blue-500/30 transition-all shadow-sm cursor-pointer active:scale-95"
+              title="Get Web Link & QR Code for mobile phone & tablet access"
+            >
+              <QrCode className="w-3.5 h-3.5 text-blue-400" />
+              <span className="text-[11px] sm:text-xs hidden sm:inline">Mobile QR</span>
             </button>
           )}
 
@@ -223,6 +287,7 @@ const Header: React.FC<Props> = ({
       <div className="container mx-auto mt-3 flex gap-1.5 overflow-x-auto pb-1 scrollbar-hide">
         {role === 'admin' && (
           <>
+            <NavButton label="Management Summary" active={currentView === 'management-summary'} onClick={() => onNavigate('management-summary')} />
             <NavButton label="Dashboard" active={currentView === 'dashboard'} onClick={() => onNavigate('dashboard')} />
             <NavButton label="Rides" active={currentView === 'counter'} onClick={() => onNavigate('counter')} />
             <NavButton label="Roster" active={currentView === 'roster'} onClick={() => onNavigate('roster')} />
@@ -232,6 +297,11 @@ const Header: React.FC<Props> = ({
             <NavButton label="Maintenance" active={currentView === 'maintenance-dashboard'} onClick={() => onNavigate('maintenance-dashboard')} />
             <NavButton label="Customer Experience (CX)" active={currentView === 'cx-feedback'} onClick={() => onNavigate('cx-feedback')} />
             <NavButton label="History" active={currentView === 'history'} onClick={() => onNavigate('history')} />
+          </>
+        )}
+        {role === 'management' && (
+          <>
+            <NavButton label="Management Summary" active={currentView === 'management-summary'} onClick={() => onNavigate('management-summary')} />
           </>
         )}
         {role === 'operation-officer' && (
@@ -247,24 +317,22 @@ const Header: React.FC<Props> = ({
         {role === 'operator' && (
           <>
             <NavButton label="My Roster" active={currentView === 'roster'} onClick={() => onNavigate('roster')} />
-            <NavButton label="Rides" active={currentView === 'counter'} onClick={() => onNavigate('counter')} />
           </>
         )}
         {role === 'maintenance' && (
           <>
             <NavButton label="Tickets & Repairs" active={currentView === 'maintenance-dashboard'} onClick={() => onNavigate('maintenance-dashboard')} />
-            <NavButton label="Customer Experience (CX)" active={currentView === 'cx-feedback'} onClick={() => onNavigate('cx-feedback')} />
           </>
         )}
         {role === 'cx' && (
           <>
             <NavButton label="Customer Experience (CX)" active={currentView === 'cx-feedback'} onClick={() => onNavigate('cx-feedback')} />
-            <NavButton label="Maintenance Status" active={currentView === 'maintenance-dashboard'} onClick={() => onNavigate('maintenance-dashboard')} />
           </>
         )}
         {role === 'sales-officer' && (
           <>
             <NavButton label="Sales Dashboard" active={currentView === 'sales-officer-dashboard'} onClick={() => onNavigate('sales-officer-dashboard')} />
+            <NavButton label="Other Sales (Category-wise)" active={currentView === 'other-sales-categories'} onClick={() => onNavigate('other-sales-categories')} />
             <NavButton label="Daily Package Sales" active={currentView === 'my-sales'} onClick={() => onNavigate('my-sales')} />
             <NavButton label="Counters" active={currentView === 'ticket-sales-dashboard'} onClick={() => onNavigate('ticket-sales-dashboard')} />
             <NavButton label="TS Assignments" active={currentView === 'ts-assignments'} onClick={() => onNavigate('ts-assignments')} />
@@ -276,7 +344,6 @@ const Header: React.FC<Props> = ({
           <>
             <NavButton label="My Roster" active={currentView === 'ts-roster'} onClick={() => onNavigate('ts-roster')} />
             <NavButton label="Daily Package Sales" active={currentView === 'my-sales'} onClick={() => onNavigate('my-sales')} />
-            <NavButton label="Counter Sales" active={currentView === 'ticket-sales-dashboard'} onClick={() => onNavigate('ticket-sales-dashboard')} />
           </>
         )}
       </div>

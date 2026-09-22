@@ -26,6 +26,7 @@ import {
   Maximize2,
   X,
   Download,
+  Upload,
   UploadCloud,
   FileImage,
   RotateCcw,
@@ -47,9 +48,14 @@ import {
   Radio,
   Settings2,
   ExternalLink,
-  CalendarRange
+  CalendarRange,
+  QrCode,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
+import { isSoundMuted, setSoundMuted, unlockAudio, playReportedIssueSound } from '../utils/soundAlerts';
 import { DateRangeResolvedModal } from './DateRangeResolvedModal';
+import { ShareModal } from './ShareModal';
 import { getDhakaDateString, formatDhakaTime, formatDhakaDateTime } from '../constants';
 
 // Helper to calculate YYYY-MM-DD offset relative to a base YYYY-MM-DD string
@@ -159,6 +165,9 @@ interface Props {
   onSwitchPortal?: (portal: 'rides' | 'cx') => void;
   onDeleteTicket?: (ticket: MaintenanceTicket) => void;
   onClearReported?: (date: string) => void;
+  onClearAllRecords?: () => void;
+  onUploadSolvedTickets?: (tickets: MaintenanceTicket[]) => void;
+  onShowModal?: (modal: any) => void;
 }
 
 export const MaintenanceDashboard: React.FC<Props> = ({ 
@@ -174,21 +183,43 @@ export const MaintenanceDashboard: React.FC<Props> = ({
   role = 'maintenance',
   onSwitchPortal,
   onDeleteTicket,
-  onClearReported
+  onClearReported,
+  onClearAllRecords,
+  onUploadSolvedTickets,
+  onShowModal
 }) => {
+  const [activePortal, setActivePortal] = useState<'rides' | 'cx'>(portalType === 'cx' ? 'cx' : 'rides');
+  const [showMobileShare, setShowMobileShare] = useState(false);
+
+  const handleSelectPortal = (targetPortal: 'rides' | 'cx') => {
+    setActivePortal(targetPortal);
+    onSwitchPortal?.(targetPortal);
+    try {
+      database.syncViewEverywhere(
+        selectedDate,
+        targetPortal === 'cx' ? 'cx-feedback' : 'maintenance-dashboard',
+        {
+          portalType: targetPortal,
+          statusTab: selectedStatusTab,
+          viewScope
+        }
+      );
+    } catch (e) {}
+  };
+
+  useEffect(() => {
+    if (role === 'maintenance') {
+      setActivePortal('rides');
+    } else if (portalType) {
+      setActivePortal(portalType === 'cx' ? 'cx' : 'rides');
+    }
+  }, [portalType, role]);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [isSyncingAll, setIsSyncingAll] = useState(false);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
   const [viewScope, setViewScope] = useState<'unresolved' | 'solved' | 'date' | 'all'>('unresolved');
-  const [selectedStatusTab, setSelectedStatusTab] = useState<'all' | 'reported' | 'in-progress' | 'solved'>(() => {
-    try {
-      const saved = sessionStorage.getItem('maintenance_status_tab');
-      if (saved === 'all' || saved === 'reported' || saved === 'in-progress' || saved === 'solved') {
-        return saved;
-      }
-    } catch (_) {}
-    return 'all';
-  });
+  const [selectedStatusTab, setSelectedStatusTab] = useState<'all' | 'reported' | 'in-progress' | 'solved'>('all');
 
   const handleStatusTabChange = useCallback((tab: 'all' | 'reported' | 'in-progress' | 'solved') => {
     setSelectedStatusTab(tab);
@@ -208,7 +239,7 @@ export const MaintenanceDashboard: React.FC<Props> = ({
   const [newTicketRideId, setNewTicketRideId] = useState<number | ''>('');
   const [newTicketProblem, setNewTicketProblem] = useState('');
   const [newTicketCategory, setNewTicketCategory] = useState<string>(
-    portalType === 'cx' ? 'Guest Comfort & Seating' : 'Operational Issue'
+    activePortal === 'cx' ? 'Guest Comfort & Seating' : 'Operational Issue'
   );
   const [newTicketPriority, setNewTicketPriority] = useState<'normal' | 'high' | 'urgent'>('normal');
   const [newTicketGuestDetails, setNewTicketGuestDetails] = useState('');
@@ -216,46 +247,30 @@ export const MaintenanceDashboard: React.FC<Props> = ({
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [showDateRangeModal, setShowDateRangeModal] = useState(false);
 
-  // WhatsApp Integration states
-  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
-  const [waModalTab, setWaModalTab] = useState<'outgoing' | 'incoming' | 'test'>('outgoing');
-  const [waConfig, setWaConfig] = useState<{
-    idInstance?: string;
-    hasToken?: boolean;
-    groupChatId?: string;
-    detectedGroupName?: string;
-    targetGroupName?: string;
-    autoNotifyOnSolved?: boolean;
-    autoNotifyOnAssigned?: boolean;
-    lastMessage?: string;
-    lastSender?: string;
-    lastMessageAt?: string;
-  }>({});
-  const [waIdInput, setWaIdInput] = useState('');
-  const [waTokenInput, setWaTokenInput] = useState('');
-  const [waTargetGroupInput, setWaTargetGroupInput] = useState('Technical support TFW');
-  const [waAutoSolved, setWaAutoSolved] = useState(true);
-  const [waAutoAssigned, setWaAutoAssigned] = useState(false);
-  const [waDirectMsg, setWaDirectMsg] = useState('');
-  const [isSavingWaConfig, setIsSavingWaConfig] = useState(false);
-  const [isSendingWaDirect, setIsSendingWaDirect] = useState(false);
-  const [waDirectSuccess, setWaDirectSuccess] = useState<string | null>(null);
-  const [waConfigSavedMsg, setWaConfigSavedMsg] = useState<string | null>(null);
-
-  const [waSimRideId, setWaSimRideId] = useState<number>(rides[0]?.id || 101);
-  const [waSimMessage, setWaSimMessage] = useState('Laser Maze vest sensor blinking red on Level 16');
-  const [waSimSender, setWaSimSender] = useState('Supervisor Kabir');
-  const [waSimPhone, setWaSimPhone] = useState('+8801712345678');
-  const [isSimulating, setIsSimulating] = useState(false);
-  const [simSuccessMsg, setSimSuccessMsg] = useState<string | null>(null);
-  const [copiedWebhook, setCopiedWebhook] = useState(false);
-
-  // WhatsApp Sync states
-  const [isSyncingWa, setIsSyncingWa] = useState(false);
-  const [syncWaSuccessMsg, setSyncWaSuccessMsg] = useState<string | null>(null);
+  // Upload Solved Records (Date Range Wise) states
+  const [showUploadSolvedModal, setShowUploadSolvedModal] = useState(false);
+  const [uploadDateFrom, setUploadDateFrom] = useState('');
+  const [uploadDateTo, setUploadDateTo] = useState('');
+  const [uploadInputText, setUploadInputText] = useState('');
+  const [parsedUploadTickets, setParsedUploadTickets] = useState<MaintenanceTicket[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadSuccessMsg, setUploadSuccessMsg] = useState<string | null>(null);
+  const [isProcessingUpload, setIsProcessingUpload] = useState(false);
 
   // Quick Ride Tag Editor state
   const [editingRideTicketId, setEditingRideTicketId] = useState<string | null>(null);
+
+  // Sound notification state and unlock
+  const [soundMuted, setLocalSoundMuted] = useState<boolean>(() => isSoundMuted());
+  const handleToggleSound = () => {
+    unlockAudio();
+    const next = !soundMuted;
+    setLocalSoundMuted(next);
+    setSoundMuted(next);
+    if (!next) {
+      playReportedIssueSound();
+    }
+  };
 
   const handleUpdateRideTag = async (ticket: MaintenanceTicket, newRideId: number, newRideName: string) => {
     const dateKey = ticket.date || selectedDate;
@@ -270,70 +285,18 @@ export const MaintenanceDashboard: React.FC<Props> = ({
     setEditingRideTicketId(null);
   };
 
-  // Load WhatsApp status
-  const fetchWhatsAppConfig = async () => {
-    try {
-      const res = await fetch('/api/whatsapp/config');
-      const data = await res.json();
-      setWaConfig(data);
-      if (data.idInstance) setWaIdInput(data.idInstance);
-      if (data.targetGroupName) setWaTargetGroupInput(data.targetGroupName);
-      if (data.autoNotifyOnSolved !== undefined) setWaAutoSolved(data.autoNotifyOnSolved);
-      if (data.autoNotifyOnAssigned !== undefined) setWaAutoAssigned(data.autoNotifyOnAssigned);
-    } catch {
-      // ignore
-    }
-  };
-
-  // Immediate WhatsApp sync trigger
-  const handleSyncWhatsAppNow = async () => {
-    setIsSyncingWa(true);
-    setSyncWaSuccessMsg(null);
-    try {
-      const res = await fetch('/api/whatsapp/sync-now', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        setSyncWaSuccessMsg(data.newTickets > 0 ? `+${data.newTickets} New` : 'Up to Date');
-        setTimeout(() => setSyncWaSuccessMsg(null), 3500);
-        fetchWhatsAppConfig();
-        if (data.newTickets > 0) {
-          await database.engine.fetchFullDatabase();
-        }
-      }
-    } catch {
-      // silent fallback
-    } finally {
-      setIsSyncingWa(false);
-    }
-  };
-
-  // Fetch WhatsApp config and sync on mount (background server handles continuous 25s polling)
-  useEffect(() => {
-    fetchWhatsAppConfig();
-    handleSyncWhatsAppNow();
-  }, []);
-
-  // Synchronize maintenance tab, viewScope, and portalType across all devices in real-time
+  // Synchronize maintenance viewScope across all devices in real-time
   useEffect(() => {
     const unsub = database.ref('config/appConfig').on('value', (snap) => {
       const cfg = snap.val();
-      if (cfg) {
-        // Never force-hide reported issues by remotely forcing 'solved' on initial mount
-        if (cfg.activeMaintenanceStatusTab && cfg.activeMaintenanceStatusTab !== 'solved' && cfg.activeMaintenanceStatusTab !== selectedStatusTab) {
-          setSelectedStatusTab(cfg.activeMaintenanceStatusTab);
-        }
-        if (cfg.activeMaintenanceViewScope && cfg.activeMaintenanceViewScope !== viewScope) {
-          setViewScope(cfg.activeMaintenanceViewScope);
-        }
-        if (cfg.activeMaintenancePortal && cfg.activeMaintenancePortal !== portalType && onSwitchPortal) {
-          onSwitchPortal(cfg.activeMaintenancePortal);
-        }
+      if (cfg && cfg.activeMaintenanceViewScope) {
+        setViewScope(prev => cfg.activeMaintenanceViewScope !== prev ? cfg.activeMaintenanceViewScope : prev);
       }
     });
     return () => {
       database.ref('config/appConfig').off('value', unsub);
     };
-  }, [portalType, onSwitchPortal, selectedStatusTab, viewScope]);
+  }, []);
 
   // Unified Sync Mobile & Desktop handler
   const handleSyncAllDevices = async () => {
@@ -341,16 +304,11 @@ export const MaintenanceDashboard: React.FC<Props> = ({
     setIsSyncing(true);
     setSyncFeedback(null);
     try {
-      // 1. Pull latest WhatsApp messages from group "Technical support TFW"
-      try {
-        await fetch('/api/whatsapp/sync-now', { method: 'POST' });
-      } catch (_) {}
-
       await database.syncViewEverywhere(
         selectedDate,
-        isCXPortal ? 'cx-feedback' : 'maintenance-dashboard',
+        activePortal === 'cx' ? 'cx-feedback' : 'maintenance-dashboard',
         {
-          portalType,
+          portalType: activePortal,
           statusTab: selectedStatusTab,
           viewScope
         }
@@ -369,63 +327,168 @@ export const MaintenanceDashboard: React.FC<Props> = ({
     }
   };
 
-  const handleSaveWaConfig = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSavingWaConfig(true);
-    setWaConfigSavedMsg(null);
+  // CSV & JSON Parser for Solved Records by Date Range
+  const handleParseUploadRecords = () => {
+    setUploadError(null);
+    setUploadSuccessMsg(null);
+    if (!uploadInputText.trim()) {
+      setUploadError('Please provide CSV or JSON data to upload.');
+      return;
+    }
+
     try {
-      const res = await fetch('/api/whatsapp/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          idInstance: waIdInput,
-          apiTokenInstance: waTokenInput || undefined,
-          targetGroupName: waTargetGroupInput,
-          autoNotifyOnSolved: waAutoSolved,
-          autoNotifyOnAssigned: waAutoAssigned
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setWaConfigSavedMsg('Green API credentials & group settings saved successfully!');
-        setWaTokenInput('');
-        fetchWhatsAppConfig();
-        setTimeout(() => setWaConfigSavedMsg(null), 4000);
+      const trimmed = uploadInputText.trim();
+      let records: MaintenanceTicket[] = [];
+
+      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        // JSON format
+        const parsed = JSON.parse(trimmed);
+        if (!Array.isArray(parsed)) throw new Error('JSON data must be an array of records.');
+        records = parsed.map((item: any, idx: number) => {
+          const matchedRide = rides.find(r => 
+            String(r.id) === String(item.rideId) || 
+            r.name.toLowerCase() === String(item.rideName || '').toLowerCase()
+          ) || rides[0];
+
+          const dateVal = item.date || uploadDateFrom || selectedDate;
+          return {
+            id: item.id || `uploaded-solved-${Date.now()}-${idx}`,
+            date: dateVal,
+            rideId: matchedRide ? matchedRide.id : (Number(item.rideId) || 1),
+            rideName: item.rideName || (matchedRide ? matchedRide.name : 'Attraction'),
+            problem: item.problem || item.issue || 'Maintenance resolution record',
+            feedbackCategory: item.feedbackCategory || item.category || 'Operational Issue',
+            priority: (['normal', 'high', 'urgent'].includes(item.priority) ? item.priority : 'normal') as any,
+            status: 'solved',
+            reportedAt: item.reportedAt || new Date(dateVal).toISOString(),
+            solvedAt: item.solvedAt || new Date(dateVal).toISOString(),
+            reportedById: Number(item.reportedById) || 0,
+            reportedByName: item.reportedByName || 'Games & Ride Associate',
+            reportedByRole: item.reportedByRole || 'Associate',
+            assignedToName: item.assignedToName || item.technician || 'Maintenance Concern',
+            assignedToPhone: item.assignedToPhone || '',
+            resolutionNotes: item.resolutionNotes || item.notes || 'Resolved and verified operational',
+            source: item.source || 'operator'
+          };
+        });
+      } else {
+        // CSV format: Date, Ride Name, Problem, Category, Priority, Technician, Resolution Notes
+        const lines = trimmed.split('\n').map(l => l.trim()).filter(Boolean);
+        if (lines.length === 0) throw new Error('CSV is empty');
+
+        let startIndex = 0;
+        // Check if first line is header
+        const firstLineLower = lines[0].toLowerCase();
+        if (firstLineLower.includes('ride') || firstLineLower.includes('date') || firstLineLower.includes('problem')) {
+          startIndex = 1;
+        }
+
+        for (let i = startIndex; i < lines.length; i++) {
+          const cols = lines[i].split(',').map(c => c.trim().replace(/^["']|["']$/g, ''));
+          if (cols.length < 2) continue;
+
+          let recDate = uploadDateFrom || selectedDate;
+          let rideStr = '';
+          let problemStr = '';
+          let categoryStr = 'Operational Issue';
+          let priorityStr: 'normal' | 'high' | 'urgent' = 'normal';
+          let techStr = 'Maintenance Concern';
+          let notesStr = 'Resolved and verified operational';
+
+          // Format: Date, Ride Name, Problem, [Category, Priority, Technician, Notes]
+          if (cols[0].match(/^\d{4}-\d{2}-\d{2}$/)) {
+            recDate = cols[0];
+            rideStr = cols[1] || '';
+            problemStr = cols[2] || 'Maintenance resolution record';
+            if (cols[3]) categoryStr = cols[3];
+            if (cols[4] && ['normal', 'high', 'urgent'].includes(cols[4].toLowerCase())) {
+              priorityStr = cols[4].toLowerCase() as any;
+            }
+            if (cols[5]) techStr = cols[5];
+            if (cols[6]) notesStr = cols[6];
+          } else {
+            rideStr = cols[0] || '';
+            problemStr = cols[1] || 'Maintenance resolution record';
+            if (cols[2]) categoryStr = cols[2];
+            if (cols[3] && ['normal', 'high', 'urgent'].includes(cols[3].toLowerCase())) {
+              priorityStr = cols[3].toLowerCase() as any;
+            }
+            if (cols[4]) techStr = cols[4];
+            if (cols[5]) notesStr = cols[5];
+          }
+
+          const matchedRide = rides.find(r => 
+            r.name.toLowerCase() === rideStr.toLowerCase() || 
+            String(r.id) === rideStr
+          ) || rides[0];
+
+          records.push({
+            id: `uploaded-solved-${Date.now()}-${i}`,
+            date: recDate,
+            rideId: matchedRide ? matchedRide.id : 1,
+            rideName: matchedRide ? matchedRide.name : (rideStr || 'Attraction'),
+            problem: problemStr,
+            feedbackCategory: categoryStr,
+            priority: priorityStr,
+            status: 'solved',
+            reportedAt: new Date(recDate).toISOString(),
+            solvedAt: new Date(recDate).toISOString(),
+            reportedById: 0,
+            reportedByName: 'Games & Ride Associate',
+            reportedByRole: 'Associate',
+            assignedToName: techStr,
+            assignedToPhone: '',
+            resolutionNotes: notesStr,
+            source: 'operator'
+          });
+        }
       }
+
+      if (records.length === 0) {
+        throw new Error('No valid records found in the uploaded text or CSV.');
+      }
+
+      setParsedUploadTickets(records);
+      setUploadSuccessMsg(`Successfully parsed ${records.length} solved record(s). Review below and click "Save Solved Records" to apply.`);
     } catch (err: any) {
-      alert('Failed to save WhatsApp config: ' + err.message);
-    } finally {
-      setIsSavingWaConfig(false);
+      setUploadError(err.message || 'Failed to parse records. Check formatting.');
+      setParsedUploadTickets([]);
     }
   };
 
-  const handleSendDirectWaMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!waDirectMsg.trim()) return;
-    setIsSendingWaDirect(true);
-    setWaDirectSuccess(null);
+  const handleConfirmUpload = () => {
+    if (parsedUploadTickets.length === 0) return;
+    setIsProcessingUpload(true);
     try {
-      const res = await fetch('/api/whatsapp/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: waDirectMsg.trim(),
-          sender: 'TFW Maintenance Officer'
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setWaDirectSuccess('Message dispatched to WhatsApp group "Technical support TFW"!');
-        setWaDirectMsg('');
-        setTimeout(() => setWaDirectSuccess(null), 5000);
-      } else {
-        alert('Could not send message: ' + (data.error || 'Unknown error'));
+      if (onUploadSolvedTickets) {
+        onUploadSolvedTickets(parsedUploadTickets);
       }
+      setUploadSuccessMsg(`Successfully saved ${parsedUploadTickets.length} solved record(s) into database!`);
+      setTimeout(() => {
+        setShowUploadSolvedModal(false);
+        setParsedUploadTickets([]);
+        setUploadInputText('');
+        setUploadSuccessMsg(null);
+        setIsProcessingUpload(false);
+      }, 1200);
     } catch (err: any) {
-      alert('Error connecting to server: ' + err.message);
-    } finally {
-      setIsSendingWaDirect(false);
+      setUploadError(err.message || 'Error saving uploaded records.');
+      setIsProcessingUpload(false);
     }
+  };
+
+  const handleDownloadSampleCsv = () => {
+    const header = 'Date,Ride Name,Problem,Category,Priority,Technician,Resolution Notes\n';
+    const row1 = `${selectedDate},Sky Coaster,Emergency stop switch calibration,Operational Issue,normal,Tech Tom,Calibrated and verified smooth stop\n`;
+    const row2 = `${selectedDate},Carousel,Motor belt friction checked,Operational Issue,high,Fixit Felix,Lubricated and tightened belt\n`;
+    const row3 = `${selectedDate},Bumper Cars,Rubber buffer alignment,Safety Inspection,normal,Dave Hydraulics,Inspected and secured bolts\n`;
+    const blob = new Blob([header + row1 + row2 + row3], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sample_solved_maintenance_template.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   // Photo attachment states
@@ -458,56 +521,34 @@ export const MaintenanceDashboard: React.FC<Props> = ({
     return ticket.date || todayStr;
   }, [todayStr]);
 
-  const isCxTicket = (t: MaintenanceTicket) => {
-    return t.source === 'cx' || 
-      t.reportedByRole?.toLowerCase().includes('cx') || 
-      t.reportedByRole?.toLowerCase().includes('customer experience');
-  };
-
-  const isWhatsAppTicket = (t: MaintenanceTicket) => {
-    return t.source === 'whatsapp' || 
-      Boolean(t.whatsappGroup) ||
-      Boolean(t.reportedByName?.toLowerCase().includes('whatsapp')) || 
-      Boolean(t.reportedByRole?.toLowerCase().includes('whatsapp')) || 
-      Boolean(t.feedbackCategory?.toLowerCase().includes('whatsapp'));
-  };
-
-  const handleSimulateWhatsApp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!waSimMessage.trim()) return;
-    setIsSimulating(true);
-    setSimSuccessMsg(null);
-    try {
-      const res = await fetch('/api/webhooks/whatsapp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: waSimMessage,
-          senderName: waSimSender,
-          phone: waSimPhone,
-          rideId: waSimRideId
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setSimSuccessMsg(`Ticket created! Ride: ${data.rideName} (${data.priority?.toUpperCase()} priority). Real-time update pushed!`);
-        setTimeout(() => setSimSuccessMsg(null), 6000);
-      } else {
-        alert(data.error || 'Failed to send test message');
+  // Strictly identify tickets sent by Customer Experience (CX) role - exclude all other issues
+  const isCxTicket = useCallback((t: MaintenanceTicket): boolean => {
+    if (!t) return false;
+    // Explicitly exclude Operator tickets unless explicitly sent by CX role
+    if (t.source === 'operator') {
+      const roleStr = (t.reportedByRole || '').toLowerCase();
+      if (!roleStr.includes('cx') && !roleStr.includes('customer experience')) {
+        return false;
       }
-    } catch (err: any) {
-      alert('Error connecting to webhook: ' + err.message);
-    } finally {
-      setIsSimulating(false);
     }
-  };
+    
+    // Must be sent by Customer Experience role or source
+    if (t.source === 'cx') return true;
+    
+    const roleStr = (t.reportedByRole || '').toLowerCase();
+    if (roleStr.includes('cx') || roleStr.includes('customer experience')) {
+      return true;
+    }
+    
+    const nameStr = (t.reportedByName || '').toLowerCase();
+    if (nameStr.includes('customer experience') || nameStr.includes('(cx)')) {
+      return true;
+    }
 
-  const handleCopyWebhookUrl = () => {
-    const url = `${window.location.origin}/api/webhooks/whatsapp`;
-    navigator.clipboard.writeText(url);
-    setCopiedWebhook(true);
-    setTimeout(() => setCopiedWebhook(false), 2500);
-  };
+    return false;
+  }, []);
+
+  const isWhatsAppTicket = (_t: MaintenanceTicket) => false;
 
   // Helper to normalize problem text across English and Bengali scripts
   const normalizeIssue = (text?: string): string => {
@@ -628,7 +669,19 @@ export const MaintenanceDashboard: React.FC<Props> = ({
 
       const best = records[0];
 
-      if (solvedRecord) {
+      // If an in-progress record is explicitly reopened or has inProgressAt/updatedAt newer than solvedAt, prefer in-progress
+      const shouldPreferInProgress = inProgressRecord && (!solvedRecord || inProgressRecord.isExplicitReopen || (
+        inProgressRecord.inProgressAt && solvedRecord.solvedAt &&
+        new Date(inProgressRecord.inProgressAt).getTime() > new Date(solvedRecord.solvedAt).getTime()
+      ));
+
+      if (shouldPreferInProgress && inProgressRecord) {
+        unifiedList.push({
+          ...best,
+          ...inProgressRecord,
+          status: 'in-progress'
+        });
+      } else if (solvedRecord) {
         unifiedList.push({
           ...best,
           ...solvedRecord,
@@ -660,13 +713,15 @@ export const MaintenanceDashboard: React.FC<Props> = ({
 
   // Base tickets filtered for current portal (Games & Ride Associates vs CX)
   const baseTickets = useMemo(() => {
-    if (portalType === 'cx') {
+    if (activePortal === 'cx') {
+      // Strictly tickets sent by Customer Experience role - exclude all other issues
       return allTicketsFlat.filter(t => isCxTicket(t));
-    } else if (portalType === 'rides') {
+    } else if (activePortal === 'rides') {
+      // Rides / Games Associates & Operators tickets
       return allTicketsFlat.filter(t => !isCxTicket(t));
     }
     return allTicketsFlat;
-  }, [allTicketsFlat, portalType]);
+  }, [allTicketsFlat, activePortal, isCxTicket]);
 
   // Global solved tickets across all portals
   const allSolvedTicketsFlat = useMemo(() => {
@@ -1079,29 +1134,13 @@ export const MaintenanceDashboard: React.FC<Props> = ({
     setShowDownloadMenu(false);
   };
 
-  // Extract tickets according to viewScope & portalType
+  // Extract tickets according to viewScope & activePortal
   const scopedTickets = useMemo(() => {
-    // If user clicked the Reported status tab specifically, show all reported tickets across all dates
-    if (selectedStatusTab === 'reported') {
-      return baseTickets
-        .filter(t => t.status === 'reported')
-        .filter(t => portalType === 'cx' ? isCxTicket(t) : (portalType === 'rides' ? !isCxTicket(t) : true))
-        .sort((a, b) => new Date(b.reportedAt || 0).getTime() - new Date(a.reportedAt || 0).getTime());
-    }
-
-    // If user clicked the In Progress status tab specifically, show all in-progress tickets across all dates
-    if (selectedStatusTab === 'in-progress') {
-      return baseTickets
-        .filter(t => t.status === 'in-progress')
-        .filter(t => portalType === 'cx' ? isCxTicket(t) : (portalType === 'rides' ? !isCxTicket(t) : true))
-        .sort((a, b) => new Date(b.reportedAt || 0).getTime() - new Date(a.reportedAt || 0).getTime());
-    }
-
-    // If viewing Solved (either status tab is 'solved' or viewScope is 'solved' when not viewing all)
-    if (selectedStatusTab === 'solved' || (selectedStatusTab !== 'all' && viewScope === 'solved')) {
+    // If viewing Solved specifically via viewScope
+    if (viewScope === 'solved') {
       return baseTickets
         .filter(t => t.status === 'solved')
-        .filter(t => portalType === 'cx' ? isCxTicket(t) : (portalType === 'rides' ? !isCxTicket(t) : true))
+        .filter(t => activePortal === 'cx' ? isCxTicket(t) : (activePortal === 'rides' ? !isCxTicket(t) : true))
         .filter(t => {
           if (solvedDateFrom || solvedDateTo) {
             return isTicketSolvedInRange(t, solvedDateFrom, solvedDateTo);
@@ -1123,13 +1162,13 @@ export const MaintenanceDashboard: React.FC<Props> = ({
           }
           return false;
         })
-        .filter(t => portalType === 'cx' ? isCxTicket(t) : (portalType === 'rides' ? !isCxTicket(t) : true))
+        .filter(t => activePortal === 'cx' ? isCxTicket(t) : (activePortal === 'rides' ? !isCxTicket(t) : true))
         .sort((a, b) => new Date(b.reportedAt || 0).getTime() - new Date(a.reportedAt || 0).getTime());
     }
 
     if (viewScope === 'all') {
       return baseTickets
-        .filter(t => portalType === 'cx' ? isCxTicket(t) : (portalType === 'rides' ? !isCxTicket(t) : true))
+        .filter(t => activePortal === 'cx' ? isCxTicket(t) : (activePortal === 'rides' ? !isCxTicket(t) : true))
         .filter(t => {
           if (t.status === 'solved' && (solvedDateFrom || solvedDateTo)) {
             return isTicketSolvedInRange(t, solvedDateFrom, solvedDateTo);
@@ -1157,7 +1196,7 @@ export const MaintenanceDashboard: React.FC<Props> = ({
     });
 
     return Array.from(ticketMap.values())
-      .filter(t => portalType === 'cx' ? isCxTicket(t) : (portalType === 'rides' ? !isCxTicket(t) : true))
+      .filter(t => activePortal === 'cx' ? isCxTicket(t) : (activePortal === 'rides' ? !isCxTicket(t) : true))
       .filter(t => {
         if (t.status === 'solved' && (solvedDateFrom || solvedDateTo)) {
           return isTicketSolvedInRange(t, solvedDateFrom, solvedDateTo);
@@ -1165,7 +1204,7 @@ export const MaintenanceDashboard: React.FC<Props> = ({
         return true;
       })
       .sort((a, b) => new Date(b.reportedAt || 0).getTime() - new Date(a.reportedAt || 0).getTime());
-  }, [baseTickets, selectedDate, selectedStatusTab, viewScope, portalType, isTicketSolvedOnDate, isTicketSolvedInRange, solvedDateFrom, solvedDateTo]);
+  }, [baseTickets, selectedDate, viewScope, activePortal, isCxTicket, isTicketSolvedOnDate, isTicketSolvedInRange, solvedDateFrom, solvedDateTo, todayStr]);
 
   // Filter tickets by search query
   const filteredTickets = useMemo(() => {
@@ -1202,7 +1241,7 @@ export const MaintenanceDashboard: React.FC<Props> = ({
     return false;
   }, [allSolvedTickets]);
 
-  const inProgress = useMemo(() => filteredTickets.filter(t => t.status === 'in-progress' && !isMatchingAnySolved(t)), [filteredTickets, isMatchingAnySolved]);
+  const inProgress = useMemo(() => filteredTickets.filter(t => t.status === 'in-progress'), [filteredTickets]);
   const reported = useMemo(() => filteredTickets.filter(t => t.status === 'reported' && !isMatchingAnySolved(t)), [filteredTickets, isMatchingAnySolved]);
 
   // Force database re-fetch from server
@@ -1307,6 +1346,11 @@ export const MaintenanceDashboard: React.FC<Props> = ({
 
     onUpdateTicketStatus(ticket, 'in-progress', primaryTech, helpers);
 
+    // If currently filtered to only reported tickets, switch to 'all' so In Progress is immediately visible
+    if (selectedStatusTab === 'reported') {
+      handleStatusTabChange('all');
+    }
+
     // Clear local selection for this ticket
     setSelectedTechsByTicket(prev => {
       const next = { ...prev };
@@ -1361,6 +1405,11 @@ export const MaintenanceDashboard: React.FC<Props> = ({
 
     onUpdateTicketStatus(ticket, 'solved', assignedTech, helpers, notes, photoData);
 
+    // If currently filtered to in-progress tickets, switch to 'all' so Resolved is immediately visible
+    if (selectedStatusTab === 'in-progress') {
+      handleStatusTabChange('all');
+    }
+
     setResolutionNotesByTicket(prev => {
       const next = { ...prev };
       delete next[ticket.id];
@@ -1381,7 +1430,7 @@ export const MaintenanceDashboard: React.FC<Props> = ({
       return;
     }
     if (onReportProblem) {
-      const isCX = portalType === 'cx';
+      const isCX = activePortal === 'cx';
       onReportProblem(
         Number(newTicketRideId),
         newTicketProblem.trim(),
@@ -1405,12 +1454,12 @@ export const MaintenanceDashboard: React.FC<Props> = ({
     return dateStr;
   };
 
-  const isCXPortal = portalType === 'cx';
+  const isCXPortal = activePortal === 'cx';
 
   return (
     <div className="space-y-6 animate-fade-in-up">
-      {/* Quick Portal Switcher Pills */}
-      {onSwitchPortal && (
+      {/* Quick Portal Switcher Pills (Hidden for CX and Maintenance roles) */}
+      {role !== 'cx' && role !== 'maintenance' && (
         <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-900/80 p-2.5 rounded-2xl border border-gray-700/80">
           <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-gray-400 uppercase tracking-wider pl-1">
@@ -1419,7 +1468,7 @@ export const MaintenanceDashboard: React.FC<Props> = ({
           </div>
           <div className="flex flex-wrap gap-2">
             <button
-              onClick={() => onSwitchPortal('rides')}
+              onClick={() => handleSelectPortal('rides')}
               className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 shadow-sm ${
                 !isCXPortal
                   ? 'bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-red-900/40 ring-2 ring-red-400/40'
@@ -1436,7 +1485,7 @@ export const MaintenanceDashboard: React.FC<Props> = ({
             </button>
 
             <button
-              onClick={() => onSwitchPortal('cx')}
+              onClick={() => handleSelectPortal('cx')}
               className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 shadow-sm ${
                 isCXPortal
                   ? 'bg-gradient-to-r from-pink-600 to-rose-600 text-white shadow-pink-900/40 ring-2 ring-pink-400/40'
@@ -1452,6 +1501,28 @@ export const MaintenanceDashboard: React.FC<Props> = ({
               )}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Alert banner if on rides portal and there are unresolved CX tickets (Hidden for Maintenance role) */}
+      {role !== 'maintenance' && !isCXPortal && cxUnresolvedCount > 0 && (
+        <div className="bg-gradient-to-r from-rose-950/80 via-pink-950/50 to-gray-900 border border-rose-800/60 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md animate-fade-in">
+          <div className="flex items-center gap-3">
+            <span className="w-3 h-3 rounded-full bg-rose-500 animate-ping flex-shrink-0" />
+            <HeartHandshake className="w-5 h-5 text-rose-400 flex-shrink-0" />
+            <div className="text-xs sm:text-sm text-gray-200">
+              <span className="font-bold text-white tracking-tight">
+                {cxUnresolvedCount} Customer Experience (CX)
+              </span> feedback {cxUnresolvedCount > 1 ? 'tickets require' : 'ticket requires'} maintenance attention.
+            </div>
+          </div>
+          <button
+            onClick={() => handleSelectPortal('cx')}
+            className="bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white text-xs font-bold px-3.5 py-1.5 rounded-xl shadow-md flex items-center justify-center gap-1.5 transition-all self-end sm:self-auto cursor-pointer"
+          >
+            <span>Switch to Customer Experience (CX)</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
@@ -1500,29 +1571,37 @@ export const MaintenanceDashboard: React.FC<Props> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          {/* WhatsApp Group Integration Modal Button */}
+          {/* 1st Step: Report Issue for Assigned Ride */}
           <button
-            onClick={() => {
-              setShowWhatsAppModal(true);
-              fetchWhatsAppConfig();
-            }}
-            className="flex items-center gap-1.5 bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 hover:text-white px-3 py-2 rounded-xl text-xs font-semibold border border-emerald-700/80 transition-all active:scale-95 shadow-sm"
-            title="Connect WhatsApp Group to Maintenance Dashboard"
+            onClick={() => setShowNewTicketModal(true)}
+            className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-blue-900/40 transition-all active:scale-95"
+            title="Report an issue for an assigned ride or game (Games & Ride Associate)"
           >
-            <MessageCircle className="w-3.5 h-3.5 text-emerald-400" />
-            <span>WhatsApp Group</span>
+            <Plus className="w-4 h-4" />
+            <span>Report Issue for Assigned Ride</span>
           </button>
 
-          {/* Quick WhatsApp Sync Button */}
+          {/* Solved Records Upload by Date Range */}
           <button
-            onClick={handleSyncWhatsAppNow}
-            disabled={isSyncingWa}
-            className="flex items-center gap-1.5 bg-emerald-900/50 hover:bg-emerald-800/80 text-emerald-300 hover:text-white px-2.5 py-2 rounded-xl text-xs font-medium border border-emerald-700/60 transition-all active:scale-95 shadow-sm"
-            title="Pull and sync latest chat messages from WhatsApp group 'Technical support TFW'"
+            onClick={() => setShowUploadSolvedModal(true)}
+            className="flex items-center gap-1.5 bg-teal-800/90 hover:bg-teal-700 text-teal-100 hover:text-white px-3 py-2 rounded-xl text-xs sm:text-sm font-bold border border-teal-600/70 transition-all active:scale-95 shadow-sm"
+            title="Upload solved issue records by date range wise"
           >
-            <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${isSyncingWa ? 'animate-spin' : ''}`} />
-            <span>{isSyncingWa ? 'Syncing...' : syncWaSuccessMsg || 'Sync WA'}</span>
+            <Upload className="w-4 h-4 text-teal-300" />
+            <span>Upload Solved (Date Range)</span>
           </button>
+
+          {/* Clear All Maintenance Records */}
+          {onClearAllRecords && (
+            <button
+              onClick={onClearAllRecords}
+              className="flex items-center gap-1.5 bg-red-950/60 hover:bg-red-900/80 text-red-300 hover:text-red-100 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold border border-red-800/60 transition-all active:scale-95 shadow-sm"
+              title="Clear all maintenance issue records and start newly from today"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-red-400" />
+              <span>Clear All Records</span>
+            </button>
+          )}
 
           {/* Force Sync button with live status */}
           <button
@@ -1540,10 +1619,23 @@ export const MaintenanceDashboard: React.FC<Props> = ({
             onClick={handleSyncAllDevices}
             disabled={isSyncingAll || isSyncing}
             className="flex items-center gap-1.5 bg-emerald-800/80 hover:bg-emerald-700 text-emerald-100 hover:text-white px-3 py-2 rounded-xl text-xs font-bold border border-emerald-600/60 transition-all active:scale-95 shadow-sm shadow-emerald-950/30 cursor-pointer disabled:opacity-50"
-            title="Sync tickets, WhatsApp updates, date, and maintenance dashboard between mobile & desktop devices simultaneously"
+            title="Sync tickets, date, and maintenance dashboard between mobile & desktop devices simultaneously"
           >
             <Radio className={`w-3.5 h-3.5 text-emerald-300 ${isSyncingAll || isSyncing ? 'animate-ping' : ''}`} />
             <span>{syncFeedback || (isSyncingAll ? 'Syncing...' : 'Sync Mobile & Desktop')}</span>
+          </button>
+
+          {/* Mobile QR Scanner Link */}
+          <button
+            onClick={() => {
+              if (onShowModal) onShowModal('share');
+              else setShowMobileShare(true);
+            }}
+            className="flex items-center gap-1.5 bg-blue-900/40 hover:bg-blue-800/60 text-blue-300 hover:text-blue-100 px-3 py-2 rounded-xl text-xs font-bold border border-blue-700/60 transition-all active:scale-95 shadow-sm cursor-pointer"
+            title="Scan QR code to open and sync maintenance dashboard on mobile phone or tablet"
+          >
+            <QrCode className="w-3.5 h-3.5 text-blue-400" />
+            <span className="hidden sm:inline">Mobile QR</span>
           </button>
 
           {/* Date Picker & Today Shortcut */}
@@ -2116,41 +2208,61 @@ export const MaintenanceDashboard: React.FC<Props> = ({
       </div>
 
       {/* Strict Workflow Sequence Banner */}
-      <div className="bg-gradient-to-r from-gray-900 via-gray-850 to-gray-900 border border-gray-750/90 rounded-2xl p-3 sm:p-3.5 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+      <div className="bg-gradient-to-r from-gray-900 via-gray-850 to-gray-900 border border-gray-750/90 rounded-2xl p-3 sm:p-3.5 shadow-md flex flex-col xl:flex-row items-start xl:items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <div className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5">
-            <CheckCircle2 className="w-3.5 h-3.5" /> Workflow Sequence
+          <div className="px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5">
+            <CheckCircle2 className="w-3.5 h-3.5" /> Maintenance Workflow Sequence
           </div>
           <span className="text-xs text-gray-400">
-            Issues move sequentially • Solved records saved permanently • Zero repetition
+            Sequential Ride Maintenance Process • Solved records saved permanently
           </span>
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] font-semibold text-gray-300 overflow-x-auto max-w-full py-0.5">
-          <div className="flex items-center gap-1 bg-green-950/50 text-green-400 border border-green-800/60 px-2.5 py-1 rounded-lg whitespace-nowrap">
-            <MessageSquare className="w-3 h-3" />
-            <span>1. WhatsApp Group</span>
-          </div>
+          <button 
+            onClick={() => setShowNewTicketModal(true)}
+            className="flex items-center gap-1 bg-blue-950/60 hover:bg-blue-900/80 text-blue-300 border border-blue-700/60 px-2.5 py-1 rounded-lg whitespace-nowrap transition-colors"
+            title="Step 1: Click to report issue for assigned ride"
+          >
+            <Plus className="w-3 h-3 text-blue-400" />
+            <span>1st: Report Issue (Associate)</span>
+          </button>
           <span className="text-gray-500">→</span>
-          <div className="flex items-center gap-1 bg-yellow-950/50 text-yellow-400 border border-yellow-800/60 px-2.5 py-1 rounded-lg whitespace-nowrap">
-            <AlertTriangle className="w-3 h-3" />
-            <span>2. Reported Issues</span>
-          </div>
+          <button
+            onClick={() => handleStatusTabChange('reported')}
+            className="flex items-center gap-1 bg-yellow-950/60 hover:bg-yellow-900/80 text-yellow-300 border border-yellow-700/60 px-2.5 py-1 rounded-lg whitespace-nowrap transition-colors"
+            title="Step 2: View reported issues queue"
+          >
+            <AlertTriangle className="w-3 h-3 text-yellow-400" />
+            <span>2nd: Reported Issues ({reported.length})</span>
+          </button>
           <span className="text-gray-500">→</span>
-          <div className="flex items-center gap-1 bg-blue-950/50 text-blue-400 border border-blue-800/60 px-2.5 py-1 rounded-lg whitespace-nowrap">
-            <Wrench className="w-3 h-3" />
-            <span>3. In Progress</span>
-          </div>
+          <button
+            onClick={() => handleStatusTabChange('in-progress')}
+            className="flex items-center gap-1 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-700/60 px-2.5 py-1 rounded-lg whitespace-nowrap transition-colors"
+            title="Step 3: Maintenance concern picking up repairs"
+          >
+            <Wrench className="w-3 h-3 text-indigo-400" />
+            <span>3rd: In Progress ({inProgress.length})</span>
+          </button>
           <span className="text-gray-500">→</span>
-          <div className="flex items-center gap-1 bg-emerald-950/50 text-emerald-400 border border-emerald-800/60 px-2.5 py-1 rounded-lg whitespace-nowrap">
-            <CheckCircle2 className="w-3 h-3" />
-            <span>4. Resolved Records (Saved)</span>
-          </div>
+          <button
+            onClick={() => handleStatusTabChange('solved')}
+            className="flex items-center gap-1 bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-700/60 px-2.5 py-1 rounded-lg whitespace-nowrap transition-colors"
+            title="Step 4: Solved and saved permanently"
+          >
+            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+            <span>4th: Solved ({solved.length})</span>
+          </button>
           <span className="text-gray-500">→</span>
-          <div className="flex items-center gap-1 bg-teal-950/50 text-teal-300 border border-teal-800/60 px-2.5 py-1 rounded-lg whitespace-nowrap">
-            <Send className="w-3 h-3" />
-            <span>5. WhatsApp Notified ✅</span>
-          </div>
+          <button
+            onClick={() => setShowUploadSolvedModal(true)}
+            className="flex items-center gap-1 bg-teal-950/60 hover:bg-teal-900/80 text-teal-300 border border-teal-700/60 px-2.5 py-1 rounded-lg whitespace-nowrap transition-colors"
+            title="Step 5: Bulk upload solved records by date range wise"
+          >
+            <Upload className="w-3 h-3 text-teal-400" />
+            <span>5th: Upload Solved (Date Range)</span>
+          </button>
         </div>
       </div>
 
@@ -2228,6 +2340,25 @@ export const MaintenanceDashboard: React.FC<Props> = ({
                 </h3>
               </div>
               <div className="flex items-center gap-2">
+                {/* Audible alert status & test button */}
+                <button
+                  type="button"
+                  onClick={handleToggleSound}
+                  className={`text-[11px] px-2 py-0.5 rounded-lg transition-all flex items-center gap-1 border cursor-pointer ${
+                    soundMuted
+                      ? 'bg-gray-800 hover:bg-gray-700 text-gray-400 border-gray-700'
+                      : 'bg-amber-950/60 hover:bg-amber-900/80 text-amber-300 border-amber-800/80 shadow-sm'
+                  }`}
+                  title={soundMuted ? 'Notification sound is muted. Click to turn sound ON.' : 'Audible sound alert is ACTIVE for reported issues. Click to test chime or mute.'}
+                >
+                  {soundMuted ? (
+                    <VolumeX className="w-3.5 h-3.5 text-gray-400" />
+                  ) : (
+                    <Volume2 className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                  )}
+                  <span className="hidden sm:inline font-semibold">{soundMuted ? 'Sound Off' : 'Sound Alert'}</span>
+                </button>
+
                 {onClearReported && reported.length > 0 && (
                   <button
                     onClick={() => onClearReported(selectedDate)}
@@ -2303,12 +2434,12 @@ export const MaintenanceDashboard: React.FC<Props> = ({
                               <MessageCircle className="w-2.5 h-2.5 text-emerald-400" /> {ticket.whatsappGroup || 'Technical support TFW'}
                             </span>
                           ) : isFromCX ? (
-                            <span className="text-[10px] bg-pink-950/80 text-pink-300 border border-pink-800/70 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
-                              <HeartHandshake className="w-2.5 h-2.5 text-pink-400" /> CX Team
+                            <span className="text-[10px] bg-rose-950/90 text-rose-200 border border-rose-500/70 px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1 shadow-sm">
+                              <HeartHandshake className="w-3 h-3 text-rose-400" /> Customer Experience (CX)
                             </span>
                           ) : (
                             <span className="text-[10px] bg-blue-950/80 text-blue-300 border border-blue-800/70 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
-                              <Gamepad2 className="w-2.5 h-2.5 text-blue-400" /> Games Associate
+                              <Gamepad2 className="w-2.5 h-2.5 text-blue-400" /> Games & Ride Associate
                             </span>
                           )}
 
@@ -2358,20 +2489,43 @@ export const MaintenanceDashboard: React.FC<Props> = ({
                     {/* Problem Description */}
                     <div className={`p-2.5 rounded-lg mb-3 border ${
                       isFromCX 
-                        ? 'bg-pink-950/20 border-pink-900/40' 
+                        ? 'bg-rose-950/25 border-rose-900/50 shadow-inner' 
                         : 'bg-red-950/30 border-red-900/50'
                     }`}>
+                      {isFromCX && (
+                        <div className="flex items-center gap-1.5 mb-1.5 pb-1 border-b border-rose-900/40">
+                          <span className="text-[10px] uppercase tracking-wider font-black text-rose-400 flex items-center gap-1">
+                            <HeartHandshake className="w-3 h-3 text-rose-400" /> Customer Experience (CX) Feedback
+                          </span>
+                          {ticket.feedbackCategory && (
+                            <span className="text-[10px] bg-rose-900/60 text-rose-200 border border-rose-700/60 px-1.5 py-0.2 rounded font-semibold ml-auto">
+                              {ticket.feedbackCategory}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <p className="text-xs sm:text-sm text-gray-200 leading-relaxed font-medium">{ticket.problem}</p>
                       
                       {ticket.guestDetails && (
-                        <div className="mt-1.5 pt-1.5 border-t border-pink-900/30 text-[11px] text-pink-300 flex items-center gap-1.5">
-                          <MessageSquare className="w-3 h-3 text-pink-400 flex-shrink-0" />
-                          <span>Guest Note: <strong>{ticket.guestDetails}</strong></span>
+                        <div className="mt-1.5 pt-1.5 border-t border-rose-900/40 text-[11px] text-rose-300 flex items-center gap-1.5">
+                          <MessageSquare className="w-3 h-3 text-rose-400 flex-shrink-0" />
+                          <span>Guest Note / Details: <strong>{ticket.guestDetails}</strong></span>
                         </div>
                       )}
 
                       <div className="text-[11px] text-gray-400 mt-1.5 flex items-center justify-between">
-                        <span>Reported by: <strong className="text-gray-300">{ticket.reportedByName}</strong></span>
+                        <span className="flex items-center gap-1 flex-wrap">
+                          <span>Reported by:</span>
+                          <strong className={isFromCX ? "text-rose-300 font-bold" : "text-gray-300 font-semibold"}>
+                            {ticket.reportedByName || (isFromCX ? 'Customer Experience (CX)' : 'Games & Ride Associate')}
+                          </strong>
+                          {ticket.reportedByRole && !isFromCX && (
+                            <span className="text-[10px] text-blue-300/80 font-normal">({ticket.reportedByRole})</span>
+                          )}
+                          {isFromCX && (
+                            <span className="text-[10px] text-rose-400 font-semibold">(Customer Experience Team)</span>
+                          )}
+                        </span>
                       </div>
                     </div>
 
@@ -2501,8 +2655,8 @@ export const MaintenanceDashboard: React.FC<Props> = ({
                               <MessageCircle className="w-2.5 h-2.5 text-emerald-400" /> {ticket.whatsappGroup || 'Technical support TFW'}
                             </span>
                           ) : isFromCX ? (
-                            <span className="text-[10px] bg-pink-950/80 text-pink-300 border border-pink-800/70 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
-                              <HeartHandshake className="w-2.5 h-2.5 text-pink-400" /> CX Team
+                            <span className="text-[10px] bg-rose-950/90 text-rose-200 border border-rose-500/70 px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1 shadow-sm">
+                              <HeartHandshake className="w-3 h-3 text-rose-400" /> Customer Experience (CX)
                             </span>
                           ) : (
                             <span className="text-[10px] bg-blue-950/80 text-blue-300 border border-blue-800/70 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
@@ -2532,12 +2686,21 @@ export const MaintenanceDashboard: React.FC<Props> = ({
                     </div>
 
                     {/* Problem */}
-                    <div className="bg-gray-900/60 p-2.5 rounded-lg mb-3 border border-gray-750">
+                    <div className={`p-2.5 rounded-lg mb-3 border ${
+                      isFromCX ? 'bg-rose-950/20 border-rose-900/50' : 'bg-gray-900/60 border-gray-750'
+                    }`}>
+                      {isFromCX && (
+                        <div className="flex items-center gap-1.5 mb-1 pb-1 border-b border-rose-900/40">
+                          <span className="text-[10px] uppercase tracking-wider font-extrabold text-rose-400 flex items-center gap-1">
+                            <HeartHandshake className="w-3 h-3 text-rose-400" /> Customer Experience (CX) Feedback
+                          </span>
+                        </div>
+                      )}
                       <p className="text-xs sm:text-sm text-gray-200 leading-relaxed">{ticket.problem}</p>
                       {ticket.guestDetails && (
-                        <div className="mt-1 text-[11px] text-pink-300 flex items-center gap-1">
-                          <MessageSquare className="w-3 h-3 text-pink-400" />
-                          <span>Guest: {ticket.guestDetails}</span>
+                        <div className="mt-1.5 pt-1.5 border-t border-rose-900/40 text-[11px] text-rose-300 flex items-center gap-1">
+                          <MessageSquare className="w-3 h-3 text-rose-400" />
+                          <span>Guest: <strong>{ticket.guestDetails}</strong></span>
                         </div>
                       )}
                     </div>
@@ -2863,8 +3026,8 @@ export const MaintenanceDashboard: React.FC<Props> = ({
                                 <MessageCircle className="w-2.5 h-2.5 text-emerald-400" /> {ticket.whatsappGroup || 'Technical support TFW'}
                               </span>
                             ) : isFromCX ? (
-                              <span className="text-[10px] bg-pink-950/80 text-pink-300 border border-pink-800/70 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
-                                <HeartHandshake className="w-2.5 h-2.5 text-pink-400" /> CX
+                              <span className="text-[10px] bg-rose-950/90 text-rose-200 border border-rose-500/70 px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1 shadow-sm">
+                                <HeartHandshake className="w-3 h-3 text-rose-400" /> Customer Experience (CX)
                               </span>
                             ) : (
                               <span className="text-[10px] bg-blue-950/80 text-blue-300 border border-blue-800/70 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
@@ -2899,13 +3062,22 @@ export const MaintenanceDashboard: React.FC<Props> = ({
                       </div>
 
                       {/* Problem Description */}
-                      <div className="bg-gray-900/60 p-2.5 rounded-lg mb-2 border border-gray-750">
-                        <div className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold mb-0.5">Reported Issue:</div>
+                      <div className={`p-2.5 rounded-lg mb-2 border ${
+                        isFromCX ? 'bg-rose-950/20 border-rose-900/50' : 'bg-gray-900/60 border-gray-750'
+                      }`}>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Reported Issue:</span>
+                          {isFromCX && (
+                            <span className="text-[10px] font-bold text-rose-400 flex items-center gap-1">
+                              <HeartHandshake className="w-3 h-3" /> Customer Experience (CX)
+                            </span>
+                          )}
+                        </div>
                         <p className="text-xs sm:text-sm text-gray-300 leading-relaxed font-medium">{ticket.problem}</p>
                         {ticket.guestDetails && (
-                          <div className="mt-1 text-[11px] text-pink-300 flex items-center gap-1">
-                            <MessageSquare className="w-3 h-3 text-pink-400" />
-                            <span>Guest: {ticket.guestDetails}</span>
+                          <div className="mt-1 text-[11px] text-rose-300 flex items-center gap-1">
+                            <MessageSquare className="w-3 h-3 text-rose-400" />
+                            <span>Guest: <strong>{ticket.guestDetails}</strong></span>
                           </div>
                         )}
                       </div>
@@ -3235,387 +3407,166 @@ export const MaintenanceDashboard: React.FC<Props> = ({
         </div>
       )}
 
-      {/* WhatsApp Integration & Live Simulator Modal */}
-      {showWhatsAppModal && (
+      {/* Upload Solved Records (Date Range Wise) Modal */}
+      {showUploadSolvedModal && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-gray-800 border border-emerald-700/80 rounded-2xl max-w-2xl w-full p-5 sm:p-6 shadow-2xl animate-fade-in-up my-8">
+          <div className="bg-gray-800 border border-teal-700/80 rounded-2xl max-w-2xl w-full p-5 sm:p-6 shadow-2xl animate-fade-in-up my-8">
             <div className="flex justify-between items-start pb-4 border-b border-gray-700">
               <div className="flex items-center gap-3">
-                <div className="p-3 bg-emerald-900/50 text-emerald-400 rounded-xl border border-emerald-700/70">
-                  <MessageCircle className="w-6 h-6" />
+                <div className="p-3 bg-teal-900/50 text-teal-400 rounded-xl border border-teal-700/70">
+                  <Upload className="w-6 h-6" />
                 </div>
                 <div>
                   <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                    WhatsApp Group: &quot;{waConfig.detectedGroupName || waConfig.targetGroupName || 'TFW Technical group'}&quot;
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold border ${
-                      waConfig.hasToken && (waConfig.groupChatId || waConfig.idInstance)
-                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                        : 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40'
-                    }`}>
-                      {waConfig.hasToken && waConfig.groupChatId ? '2-Way Connected' : 'Config Gateway'}
-                    </span>
+                    Upload Solved Records (Date Range Wise)
                   </h3>
                   <p className="text-xs text-gray-400 mt-0.5">
-                    Two-way live integration: messages sent in your mobile group directly arrive in Reported Issues (Associates).
+                    Bulk import resolved maintenance records with date ranges, technician names, and resolution notes.
                   </p>
                 </div>
               </div>
               <button 
-                onClick={() => setShowWhatsAppModal(false)}
+                onClick={() => setShowUploadSolvedModal(false)}
                 className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-700 transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Navigation Tabs */}
-            <div className="flex gap-2 border-b border-gray-700 pt-3 pb-3">
-              <button
-                type="button"
-                onClick={() => setWaModalTab('outgoing')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
-                  waModalTab === 'outgoing'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'bg-gray-700/60 hover:bg-gray-700 text-gray-300'
-                }`}
-              >
-                <Radio className="w-3.5 h-3.5" />
-                <span>Outgoing & Broadcast</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setWaModalTab('incoming')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
-                  waModalTab === 'incoming'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'bg-gray-700/60 hover:bg-gray-700 text-gray-300'
-                }`}
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Incoming Webhook Setup</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setWaModalTab('test')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
-                  waModalTab === 'test'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'bg-gray-700/60 hover:bg-gray-700 text-gray-300'
-                }`}
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Live Test Simulator</span>
-              </button>
-            </div>
-
             <div className="mt-4 space-y-4">
-              {/* TAB 1: OUTGOING & BROADCAST */}
-              {waModalTab === 'outgoing' && (
-                <div className="space-y-4">
-                  {/* Status Banner */}
-                  <div className="p-3.5 bg-gray-900/80 border border-gray-700 rounded-xl space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
-                        <MessageCircle className="w-4 h-4 text-emerald-400" />
-                        <span>Connected Group: <strong>&quot;{waConfig.detectedGroupName || waConfig.targetGroupName || 'Technical support TFW'}&quot;</strong></span>
-                      </span>
+              {/* Date Range Selection */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-gray-900/70 p-3.5 rounded-xl border border-gray-700">
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-300 mb-1">
+                    Start Date / Default Date
+                  </label>
+                  <input
+                    type="date"
+                    value={uploadDateFrom || selectedDate}
+                    onChange={(e) => setUploadDateFrom(e.target.value)}
+                    className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-1.5 text-xs text-white outline-none focus:border-teal-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-300 mb-1">
+                    End Date (Optional Range)
+                  </label>
+                  <input
+                    type="date"
+                    value={uploadDateTo || selectedDate}
+                    onChange={(e) => setUploadDateTo(e.target.value)}
+                    className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-1.5 text-xs text-white outline-none focus:border-teal-500"
+                  />
+                </div>
+              </div>
+
+              {/* Sample Template & Format Tips */}
+              <div className="flex items-center justify-between bg-teal-950/40 border border-teal-800/50 rounded-xl px-3.5 py-2.5">
+                <div className="text-xs text-teal-200">
+                  <span>Format: <strong>Date, Ride Name, Problem, Category, Priority, Technician, Resolution Notes</strong></span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDownloadSampleCsv}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-800/80 hover:bg-teal-700 text-white rounded-lg text-xs font-semibold transition-colors border border-teal-600/70"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Sample CSV</span>
+                </button>
+              </div>
+
+              {/* CSV / Text Input Area */}
+              <div>
+                <label className="block text-xs font-bold text-gray-300 mb-1.5">
+                  Paste CSV or JSON Solved Tickets Data:
+                </label>
+                <textarea
+                  value={uploadInputText}
+                  onChange={(e) => {
+                    setUploadInputText(e.target.value);
+                    setUploadError(null);
+                  }}
+                  placeholder={`Example CSV rows:\n${selectedDate},Sky Coaster,Emergency switch calibration,Operational Issue,normal,Tech Tom,Calibrated and tested\n${selectedDate},Carousel,Motor belt friction checked,Operational Issue,high,Fixit Felix,Lubricated and tightened`}
+                  rows={6}
+                  className="w-full bg-gray-900 border border-gray-700 rounded-xl p-3 text-xs text-gray-200 font-mono focus:border-teal-500 outline-none resize-y"
+                />
+              </div>
+
+              {/* Action Buttons: Parse */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleParseUploadRecords}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-teal-700 hover:bg-teal-600 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Parse & Preview Records</span>
+                </button>
+                {parsedUploadTickets.length > 0 && (
+                  <span className="text-xs font-bold text-emerald-400">
+                    ✓ {parsedUploadTickets.length} records ready
+                  </span>
+                )}
+              </div>
+
+              {/* Error & Feedback Messages */}
+              {uploadError && (
+                <div className="p-3 bg-red-950/70 border border-red-700 text-red-200 rounded-xl text-xs flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                  <span>{uploadError}</span>
+                </div>
+              )}
+
+              {uploadSuccessMsg && (
+                <div className="p-3 bg-emerald-950/70 border border-emerald-700 text-emerald-200 rounded-xl text-xs flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                  <span>{uploadSuccessMsg}</span>
+                </div>
+              )}
+
+              {/* Parsed Preview Table */}
+              {parsedUploadTickets.length > 0 && (
+                <div className="bg-gray-900 border border-gray-700 rounded-xl p-3 max-h-48 overflow-y-auto space-y-1.5">
+                  <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                    Preview ({parsedUploadTickets.length} Solved Tickets):
+                  </div>
+                  {parsedUploadTickets.map((rec, idx) => (
+                    <div key={idx} className="flex items-center justify-between text-xs py-1 px-2 rounded bg-gray-800/80 border border-gray-700">
                       <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={handleSyncWhatsAppNow}
-                          disabled={isSyncingWa}
-                          className="flex items-center gap-1 bg-emerald-800/80 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-md text-[11px] font-bold border border-emerald-600 transition-all active:scale-95"
-                          title="Fetch latest chat messages right now"
-                        >
-                          <RefreshCw className={`w-3 h-3 ${isSyncingWa ? 'animate-spin' : ''}`} />
-                          <span>{isSyncingWa ? 'Syncing...' : syncWaSuccessMsg || 'Sync Now'}</span>
-                        </button>
-                        {waConfig.groupChatId ? (
-                          <span className="text-[11px] bg-emerald-950 text-emerald-400 border border-emerald-800 px-2 py-0.5 rounded-md font-mono">
-                            Live Sync Active ✓
-                          </span>
-                        ) : (
-                          <span className="text-[11px] bg-yellow-950/70 text-yellow-400 border border-yellow-800 px-2 py-0.5 rounded-md">
-                            Auto-detecting...
-                          </span>
-                        )}
+                        <span className="font-bold text-teal-300">{rec.rideName}</span>
+                        <span className="text-gray-400 text-[11px]">• {rec.problem}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px] text-gray-300">
+                        <span className="bg-teal-900/60 px-2 py-0.5 rounded text-teal-200">{rec.assignedToName}</span>
+                        <span className="text-gray-400 font-mono">{rec.date}</span>
                       </div>
                     </div>
-                    <p className="text-xs text-gray-400 leading-relaxed">
-                      Whenever a maintenance ticket is solved or assigned, our system can automatically send a professional status update directly to your <strong>Technical support TFW</strong> WhatsApp group!
-                    </p>
-                    {waConfig.lastMessage && (
-                      <div className="text-[11px] text-gray-300 bg-gray-800/80 p-2 rounded-lg border border-gray-700/60 flex items-center justify-between">
-                        <span>Last incoming message from <strong>{waConfig.lastSender || 'Group'}</strong>: &ldquo;{waConfig.lastMessage}&rdquo;</span>
-                        <span className="text-gray-400 text-[10px]">{waConfig.lastMessageAt ? formatDhakaTime(waConfig.lastMessageAt) : ''}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Green API Credentials Form */}
-                  <form onSubmit={handleSaveWaConfig} className="bg-gray-900/60 p-3.5 rounded-xl border border-gray-700 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-gray-200 uppercase tracking-wider flex items-center gap-1.5">
-                        <Settings2 className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Green API Credentials (from your Green API screen):</span>
-                      </span>
-                      <a 
-                        href="https://green-api.com" 
-                        target="_blank" 
-                        rel="noreferrer" 
-                        className="text-[11px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1"
-                      >
-                        <span>Open Green API</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-bold text-gray-400 mb-1">
-                          idInstance (e.g. 1101...):
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={waIdInput}
-                          onChange={(e) => setWaIdInput(e.target.value)}
-                          placeholder="e.g. 1101823901"
-                          className="w-full bg-gray-800 text-white rounded-lg p-2 text-xs border border-gray-700 outline-none focus:border-emerald-500 font-mono"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-bold text-gray-400 mb-1">
-                          apiTokenInstance:
-                        </label>
-                        <input
-                          type="password"
-                          value={waTokenInput}
-                          onChange={(e) => setWaTokenInput(e.target.value)}
-                          placeholder={waConfig.hasToken ? '•••••••••••••••• (Saved)' : 'Paste API Token'}
-                          className="w-full bg-gray-800 text-white rounded-lg p-2 text-xs border border-gray-700 outline-none focus:border-emerald-500 font-mono"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                      <label className="flex items-center gap-2 cursor-pointer text-xs text-gray-300">
-                        <input
-                          type="checkbox"
-                          checked={waAutoSolved}
-                          onChange={(e) => setWaAutoSolved(e.target.checked)}
-                          className="rounded border-gray-700 text-emerald-600 focus:ring-emerald-500"
-                        />
-                        <span>Auto-send WhatsApp update when ticket is <strong>SOLVED</strong></span>
-                      </label>
-
-                      <label className="flex items-center gap-2 cursor-pointer text-xs text-gray-300">
-                        <input
-                          type="checkbox"
-                          checked={waAutoAssigned}
-                          onChange={(e) => setWaAutoAssigned(e.target.checked)}
-                          className="rounded border-gray-700 text-emerald-600 focus:ring-emerald-500"
-                        />
-                        <span>Auto-send WhatsApp update when technician is <strong>ASSIGNED</strong></span>
-                      </label>
-                    </div>
-
-                    {waConfigSavedMsg && (
-                      <div className="p-2 bg-emerald-950 border border-emerald-500 text-emerald-300 text-xs rounded-lg font-semibold flex items-center gap-1.5">
-                        <CheckCheck className="w-3.5 h-3.5" />
-                        <span>{waConfigSavedMsg}</span>
-                      </div>
-                    )}
-
-                    <div className="flex justify-end pt-1">
-                      <button
-                        type="submit"
-                        disabled={isSavingWaConfig}
-                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition-all shadow-md active:scale-95 disabled:opacity-50"
-                      >
-                        {isSavingWaConfig ? 'Saving...' : 'Save WhatsApp Credentials'}
-                      </button>
-                    </div>
-                  </form>
-
-                  {/* Direct Chat / Reply Box to the Group */}
-                  <form onSubmit={handleSendDirectWaMessage} className="bg-gray-900/60 p-3.5 rounded-xl border border-gray-700 space-y-2.5">
-                    <span className="text-xs font-bold text-gray-200 uppercase tracking-wider flex items-center gap-1.5">
-                      <Send className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Post Quick Message to &quot;Technical support TFW&quot;:</span>
-                    </span>
-
-                    <textarea
-                      rows={2}
-                      required
-                      value={waDirectMsg}
-                      onChange={(e) => setWaDirectMsg(e.target.value)}
-                      placeholder="e.g. Paintball compressor maintenance completed, all 6 guns ready for guests."
-                      className="w-full bg-gray-800 text-white rounded-lg p-2.5 text-xs border border-gray-700 outline-none focus:border-emerald-500 resize-none"
-                    />
-
-                    {waDirectSuccess && (
-                      <div className="p-2 bg-emerald-950 border border-emerald-500 text-emerald-300 text-xs rounded-lg font-semibold flex items-center gap-1.5">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>{waDirectSuccess}</span>
-                      </div>
-                    )}
-
-                    <div className="flex justify-between items-center pt-1">
-                      <span className="text-[11px] text-gray-400">
-                        Sends directly into your mobile WhatsApp group.
-                      </span>
-                      <button
-                        type="submit"
-                        disabled={isSendingWaDirect || !waDirectMsg.trim()}
-                        className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg text-xs font-bold transition-all shadow-md active:scale-95 disabled:opacity-50"
-                      >
-                        <Send className={`w-3.5 h-3.5 ${isSendingWaDirect ? 'animate-spin' : ''}`} />
-                        <span>{isSendingWaDirect ? 'Sending...' : 'Send to WhatsApp Group'}</span>
-                      </button>
-                    </div>
-                  </form>
-                </div>
-              )}
-
-              {/* TAB 2: INCOMING WEBHOOK SETUP */}
-              {waModalTab === 'incoming' && (
-                <div className="space-y-4">
-                  {/* Database Safety Guarantee Box */}
-                  <div className="p-3.5 bg-emerald-950/30 border border-emerald-800/60 rounded-xl">
-                    <div className="flex items-center gap-2 text-xs font-bold text-emerald-300 uppercase tracking-wider mb-1.5">
-                      <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                      <span>Zero-Risk Database Guarantee</span>
-                    </div>
-                    <ul className="text-xs text-emerald-200/90 space-y-1 pl-1">
-                      <li>• <strong>Strictly Isolated:</strong> Incoming WhatsApp messages ONLY create entries in <code className="bg-emerald-900/50 px-1 py-0.5 rounded text-emerald-200">data/maintenanceTickets</code>. They NEVER touch counter sales, revenue, rosters, or attendance.</li>
-                      <li>• <strong>No Quota or Cloud Billing:</strong> Webhooks run on the local offline server engine and persist directly to SQLite with zero third-party limits or costs.</li>
-                      <li>• <strong>Auto-Ride Recognition:</strong> Mentions of rides (e.g. &ldquo;Laser Maze&rdquo;, &ldquo;Paintball&rdquo;, &ldquo;VR Tank&rdquo;) automatically link to the correct attraction.</li>
-                    </ul>
-                  </div>
-
-                  {/* Webhook URL Box */}
-                  <div>
-                    <label className="block text-xs font-bold text-gray-300 uppercase tracking-wider mb-1.5">
-                      Your Webhook Target URL:
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        readOnly
-                        value={typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/whatsapp` : '/api/webhooks/whatsapp'}
-                        className="flex-1 bg-gray-900 text-emerald-300 border border-gray-700 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-mono select-all outline-none"
-                      />
-                      <button
-                        onClick={handleCopyWebhookUrl}
-                        className="flex items-center gap-1.5 px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-md flex-shrink-0"
-                      >
-                        {copiedWebhook ? <CheckCheck className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                        <span>{copiedWebhook ? 'Copied!' : 'Copy URL'}</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* 3 Steps in Green API Guide */}
-                  <div className="bg-gray-900/80 p-3.5 rounded-xl border border-gray-700 space-y-2 text-xs">
-                    <span className="font-bold text-gray-200 uppercase tracking-wider block">
-                      3 Steps to Connect in Green API:
-                    </span>
-                    <ol className="list-decimal pl-4 space-y-1.5 text-gray-300">
-                      <li>In your Green API dashboard, click <strong>Instances</strong> on the far left.</li>
-                      <li>Click your Instance number (e.g. <code className="bg-gray-800 px-1 py-0.5 rounded text-emerald-300">1101...</code>).</li>
-                      <li>Paste the URL above into <strong>&quot;URL for receiving notifications&quot;</strong> and enable <strong>incomingMessageReceived</strong>. Click Save.</li>
-                    </ol>
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 3: LIVE TEST SIMULATOR */}
-              {waModalTab === 'test' && (
-                <div className="space-y-3 bg-gray-900/60 p-3.5 rounded-xl border border-gray-700/80">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-bold text-gray-200 uppercase tracking-wider flex items-center gap-1.5">
-                      <Send className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Test & Simulate Incoming Group Message:</span>
-                    </span>
-                    <span className="text-[11px] text-gray-400">Verifies live pop-up instantly</span>
-                  </div>
-
-                  <form onSubmit={handleSimulateWhatsApp} className="space-y-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-bold text-gray-400 mb-1">Target Ride / Attraction:</label>
-                        <select
-                          value={waSimRideId}
-                          onChange={(e) => setWaSimRideId(Number(e.target.value))}
-                          className="w-full bg-gray-800 text-white rounded-lg p-2 text-xs border border-gray-700 outline-none"
-                        >
-                          {rides.map(r => (
-                            <option key={r.id} value={r.id}>{r.name} ({r.floor || 'Ride'})</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-bold text-gray-400 mb-1">Sender Name (from WhatsApp group):</label>
-                        <input
-                          type="text"
-                          value={waSimSender}
-                          onChange={(e) => setWaSimSender(e.target.value)}
-                          placeholder="e.g. Supervisor Kabir"
-                          className="w-full bg-gray-800 text-white rounded-lg p-2 text-xs border border-gray-700 outline-none"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-bold text-gray-400 mb-1">
-                        WhatsApp Message Text:
-                      </label>
-                      <textarea
-                        rows={2}
-                        required
-                        value={waSimMessage}
-                        onChange={(e) => setWaSimMessage(e.target.value)}
-                        placeholder="e.g. Laser Maze vest sensor blinking red on Level 16 - urgent"
-                        className="w-full bg-gray-800 text-white rounded-lg p-2 text-xs border border-gray-700 outline-none resize-none"
-                      />
-                    </div>
-
-                    {simSuccessMsg && (
-                      <div className="p-2.5 bg-emerald-950/80 border border-emerald-500/70 rounded-lg text-emerald-300 text-xs font-semibold flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-400" />
-                        <span>{simSuccessMsg}</span>
-                      </div>
-                    )}
-
-                    <div className="flex justify-between items-center pt-1">
-                      <span className="text-[11px] text-gray-400 italic">
-                        Tip: Words like &quot;urgent&quot; or &quot;broken&quot; automatically set high priority.
-                      </span>
-                      <button
-                        type="submit"
-                        disabled={isSimulating}
-                        className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 disabled:opacity-50"
-                      >
-                        <Send className={`w-3.5 h-3.5 ${isSimulating ? 'animate-bounce' : ''}`} />
-                        <span>{isSimulating ? 'Sending...' : 'Simulate Message'}</span>
-                      </button>
-                    </div>
-                  </form>
+                  ))}
                 </div>
               )}
             </div>
 
-            <div className="flex justify-end pt-4 border-t border-gray-700 mt-4">
+            <div className="flex justify-between items-center pt-4 border-t border-gray-700 mt-4">
               <button
-                onClick={() => setShowWhatsAppModal(false)}
-                className="px-5 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-xl text-xs font-semibold transition-colors"
+                onClick={() => {
+                  setShowUploadSolvedModal(false);
+                  setParsedUploadTickets([]);
+                  setUploadError(null);
+                  setUploadSuccessMsg(null);
+                }}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-xl text-xs font-semibold transition-colors"
               >
-                Done
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmUpload}
+                disabled={parsedUploadTickets.length === 0 || isProcessingUpload}
+                className="flex items-center gap-1.5 px-5 py-2 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 disabled:opacity-50 cursor-pointer"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>{isProcessingUpload ? 'Saving...' : `Save ${parsedUploadTickets.length} Solved Records`}</span>
               </button>
             </div>
           </div>
@@ -3628,9 +3579,14 @@ export const MaintenanceDashboard: React.FC<Props> = ({
         onClose={() => setShowDateRangeModal(false)}
         allTickets={allTicketsFlat}
         rides={rides}
-        initialPortalType={portalType === 'cx' ? 'cx' : 'rides'}
+        initialPortalType={activePortal === 'cx' ? 'cx' : 'rides'}
         todayStr={todayStr}
       />
+
+      {/* Mobile QR Link & Pairing Modal */}
+      {showMobileShare && (
+        <ShareModal onClose={() => setShowMobileShare(false)} />
+      )}
     </div>
   );
 };

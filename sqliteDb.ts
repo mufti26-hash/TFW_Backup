@@ -145,6 +145,8 @@ export function getSqliteDatabase(dbPath: string = DEFAULT_SQLITE_PATH): Databas
       operator_assignments TEXT,
       ticket_sales_assignments TEXT,
       daily_counts TEXT,
+      daily_package_counts TEXT,
+      daily_ticket_counts TEXT,
       ticket_sales_data TEXT,
       package_sales TEXT,
       updated_at TEXT NOT NULL
@@ -162,6 +164,13 @@ export function getSqliteDatabase(dbPath: string = DEFAULT_SQLITE_PATH): Databas
 
     CREATE INDEX IF NOT EXISTS idx_history_timestamp ON history_logs(timestamp);
   `);
+
+  try {
+    db.exec(`ALTER TABLE daily_operations ADD COLUMN daily_package_counts TEXT;`);
+  } catch (_) {}
+  try {
+    db.exec(`ALTER TABLE daily_operations ADD COLUMN daily_ticket_counts TEXT;`);
+  } catch (_) {}
 
   sqliteInstance = db;
   return db;
@@ -399,8 +408,8 @@ export function saveToSqlite(appDb: any, dbPath: string = DEFAULT_SQLITE_PATH): 
     // 7. Date-Indexed Daily Operations
     const stmtDailyOp = db.prepare(`
       INSERT OR REPLACE INTO daily_operations (
-        operational_date, attendance, operator_assignments, ticket_sales_assignments, daily_counts, ticket_sales_data, package_sales, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        operational_date, attendance, operator_assignments, ticket_sales_assignments, daily_counts, daily_package_counts, daily_ticket_counts, ticket_sales_data, package_sales, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const allDates = new Set<string>([
@@ -408,6 +417,8 @@ export function saveToSqlite(appDb: any, dbPath: string = DEFAULT_SQLITE_PATH): 
       ...Object.keys(data.operatorAssignments || {}),
       ...Object.keys(data.ticketSalesAssignments || {}),
       ...Object.keys(data.dailyCounts || {}),
+      ...Object.keys(data.dailyPackageCounts || {}),
+      ...Object.keys(data.dailyTicketCounts || {}),
       ...Object.keys(data.ticketSalesData || {}),
       ...Object.keys(data.packageSales || {})
     ]);
@@ -419,6 +430,8 @@ export function saveToSqlite(appDb: any, dbPath: string = DEFAULT_SQLITE_PATH): 
         JSON.stringify(data.operatorAssignments?.[date] || {}),
         JSON.stringify(data.ticketSalesAssignments?.[date] || {}),
         JSON.stringify(data.dailyCounts?.[date] || {}),
+        JSON.stringify(data.dailyPackageCounts?.[date] || {}),
+        JSON.stringify(data.dailyTicketCounts?.[date] || {}),
         JSON.stringify(data.ticketSalesData?.[date] || {}),
         JSON.stringify(data.packageSales?.[date] || {}),
         lastUpdated
@@ -561,6 +574,8 @@ export function loadFromSqlite(dbPath: string = DEFAULT_SQLITE_PATH): any | null
       operatorAssignments: {},
       ticketSalesAssignments: {},
       dailyCounts: {},
+      dailyPackageCounts: {},
+      dailyTicketCounts: {},
       ticketSalesData: {},
       packageSales: {},
       maintenanceTickets: {},
@@ -596,8 +611,27 @@ export function loadFromSqlite(dbPath: string = DEFAULT_SQLITE_PATH): any | null
       if (row.operator_assignments) try { data.operatorAssignments[d] = JSON.parse(row.operator_assignments); } catch {}
       if (row.ticket_sales_assignments) try { data.ticketSalesAssignments[d] = JSON.parse(row.ticket_sales_assignments); } catch {}
       if (row.daily_counts) try { data.dailyCounts[d] = JSON.parse(row.daily_counts); } catch {}
+      if (row.daily_package_counts) try { data.dailyPackageCounts[d] = JSON.parse(row.daily_package_counts); } catch {}
+      if (row.daily_ticket_counts) try { data.dailyTicketCounts[d] = JSON.parse(row.daily_ticket_counts); } catch {}
       if (row.ticket_sales_data) try { data.ticketSalesData[d] = JSON.parse(row.ticket_sales_data); } catch {}
       if (row.package_sales) try { data.packageSales[d] = JSON.parse(row.package_sales); } catch {}
+    }
+
+    // Ensure historical guest counts entered by ride associates in dailyCounts are preserved in dailyPackageCounts
+    for (const d of Object.keys(data.dailyCounts || {})) {
+      if (!data.dailyPackageCounts[d]) data.dailyPackageCounts[d] = {};
+      if (!data.dailyTicketCounts[d]) data.dailyTicketCounts[d] = {};
+      const dayCounts = data.dailyCounts[d] || {};
+      for (const [rId, cVal] of Object.entries(dayCounts)) {
+        const num = Number(cVal) || 0;
+        if (num > 0) {
+          const pkgNum = Number(data.dailyPackageCounts[d][rId]) || 0;
+          const tktNum = Number(data.dailyTicketCounts[d][rId]) || 0;
+          if (pkgNum === 0 && tktNum === 0) {
+            data.dailyPackageCounts[d][rId] = num;
+          }
+        }
+      }
     }
 
     // History Logs

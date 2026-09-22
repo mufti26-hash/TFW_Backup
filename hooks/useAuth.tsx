@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Operator } from '../types';
 
-export type Role = 'admin' | 'operator' | 'operation-officer' | 'ticket-sales' | 'sales-officer' | 'maintenance' | 'cx' | null;
+export type Role = 'admin' | 'operator' | 'operation-officer' | 'ticket-sales' | 'sales-officer' | 'maintenance' | 'cx' | 'management' | null;
 
 export const useAuth = () => {
   const [role, setRole] = useState<Role>(() => {

@@ -11,6 +11,8 @@ export interface Ride {
 
 export interface RideWithCount extends Ride {
   count: number;
+  packageCount?: number;
+  ticketCount?: number;
 }
 
 export interface Operator {
@@ -78,6 +80,7 @@ export interface AppConfig {
   loginHeading?: string;
   loginSubheading?: string;
   announcementText?: string;
+  managementPassword?: string;
   adminPassword?: string;
   operationOfficerPassword?: string;
   salesOfficerPassword?: string;
@@ -102,6 +105,7 @@ export interface AppConfig {
     avatarUrl: string;
     roleBadge?: string;
   }>;
+  managementNotes?: Record<string, ManagementSummaryNotes>;
 }
 
 export interface AttendanceRecord {
@@ -109,6 +113,39 @@ export interface AttendanceRecord {
   operatorId: number;
   attendedBriefing: boolean;
   briefingTime: string | null;
+}
+
+export interface ManagementNoteItem {
+  id: string;
+  text: string;
+  status?: 'pending' | 'approved' | 'rejected' | 'completed';
+  addedAt?: string;
+  addedBy?: string;
+}
+
+export interface ManagementSummaryNotes {
+  sprRequired?: string;
+  noteApproval?: string;
+  others?: string;
+  sprList?: (string | ManagementNoteItem)[];
+  noteApprovalList?: (string | ManagementNoteItem)[];
+  othersList?: (string | ManagementNoteItem)[];
+  operationsNotes?: string;
+  operationsNotesList?: (string | ManagementNoteItem)[];
+  salesNotes?: string;
+  salesNotesList?: (string | ManagementNoteItem)[];
+  operationalSummary?: {
+    startDate?: string;
+    endDate?: string;
+    totalGuestsInRange?: number;
+    packageEntriesInRange?: number;
+    ticketEntriesInRange?: number;
+    selectedGameId?: string;
+    savedAt?: string;
+    savedBy?: string;
+  };
+  updatedAt?: string;
+  updatedBy?: string;
 }
 
 export interface AttendanceData {
@@ -135,6 +172,9 @@ export interface PackageSalesRecord {
     baseAmount?: number;
     discount?: string;
     description?: string; 
+    customName?: string;
+    count?: number;
+    unitPrice?: number;
   }>;
   packages?: Record<string, number>;
 }
@@ -160,8 +200,11 @@ export interface MaintenanceTicket {
   priority?: 'normal' | 'high' | 'urgent';
   guestDetails?: string;
   reportedAt: string;
+  targetDepartment?: 'both' | 'operation-officer' | 'sales-officer' | 'all' | string;
+  solvedByRole?: string;
   assignedToId?: number;
   assignedToName?: string;
+  assignedToPhone?: string;
   helperIds?: number[];
   helperNames?: string[];
   inProgressAt?: string;

@@ -81,6 +81,14 @@ export const DEFAULT_PACKAGES: PackageItem[] = [
     active: true 
   },
   { 
+    id: 'pkg-kiddo-holiday', 
+    name: 'Toggi Kiddo (weekend & Gov.Holiday)', 
+    price: 1200, 
+    category: 'Kids', 
+    description: 'Package includes ENTRY + All Rides & Games of Level 9 to 11 (Weekend & Gov. Holiday).', 
+    active: true 
+  },
+  { 
     id: 'pkg-1788672381705', 
     name: 'Toggi Xtreme', 
     price: 3500, 
@@ -89,11 +97,27 @@ export const DEFAULT_PACKAGES: PackageItem[] = [
     active: true 
   },
   { 
+    id: 'pkg-xtreme-holiday', 
+    name: 'Toggi Xtreme (weekend & Gov.Holiday)', 
+    price: 3600, 
+    category: 'All Games', 
+    description: 'Package includes ENTRY + All Rides & Games of Level 9 to 17 (Weekend & Gov. Holiday).', 
+    active: true 
+  },
+  { 
     id: 'pkg-1788672459006', 
     name: 'Toggi VIP Concierge', 
     price: 10000, 
     category: 'All Games & Rides', 
-    description: 'Package includes ENTRY + All Rides & Games of Level 9 to 17.3 hours of dedicated concierge service.', 
+    description: 'Package includes ENTRY + All Rides & Games of Level 9 to 17. 3 hours of dedicated concierge service.', 
+    active: true 
+  },
+  { 
+    id: 'pkg-vip-holiday', 
+    name: 'Toggi VIP Concierge (weekend & Gov.Holiday)', 
+    price: 10100, 
+    category: 'All Games & Rides', 
+    description: 'Package includes ENTRY + All Rides & Games of Level 9 to 17. 3 hours of dedicated concierge service (Weekend & Gov. Holiday).', 
     active: true 
   },
   { 
@@ -123,7 +147,8 @@ export const DEFAULT_STAFF_ROLES: StaffRoleDefinition[] = [
   { id: 'role-14', name: 'Customer Experience Specialist', department: 'general', description: 'Gathers guest feedback across all rides and logs maintenance issues', isSystem: true, loginRole: 'cx', enabledForLogin: true },
   { id: 'role-15', name: 'Customer Experience (CX)', department: 'general', description: 'Customer Experience team monitoring guest sentiment and ride maintenance feedback', isSystem: true, loginRole: 'cx', enabledForLogin: true },
   { id: 'role-16', name: 'Safety Officer', department: 'management', description: 'Safety inspection, guest safety compliance, and emergency protocols', isSystem: false, loginRole: 'operation-officer', enabledForLogin: false },
-  { id: 'role-17', name: 'System Administrator', department: 'management', description: 'Full system administration, entity configurations, and data management', isSystem: true, loginRole: 'admin', enabledForLogin: true }
+  { id: 'role-17', name: 'System Administrator', department: 'management', description: 'Full system administration, entity configurations, and data management', isSystem: true, loginRole: 'admin', enabledForLogin: true },
+  { id: 'role-18', name: 'Management', department: 'management', description: 'Executive Management: Real-time Operations, Sales, Attendance & Maintenance summaries', isSystem: true, loginRole: 'management', enabledForLogin: true }
 ];
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
@@ -146,6 +171,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   loginHeading: 'Sign In',
   loginSubheading: 'Select your role and identity to begin shift operations',
   announcementText: '',
+  managementPassword: 'manage79',
   adminPassword: 'admin79',
   operationOfficerPassword: 'ops79',
   salesOfficerPassword: 'sales79',
@@ -233,48 +259,65 @@ export const findLatestRecordedDate = (
   operatorAssignments?: Record<string, any>,
   packageSales?: Record<string, any>,
   attendance?: Record<string, any>,
-  maintenanceTickets?: Record<string, any>
+  maintenanceTickets?: Record<string, any>,
+  dailyPackageCounts?: Record<string, Record<string, number>>,
+  dailyTicketCounts?: Record<string, Record<string, number>>
 ): string | null => {
   const dates = new Set<string>();
+  const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
   
   if (dailyCounts && typeof dailyCounts === 'object') {
     Object.entries(dailyCounts).forEach(([d, counts]) => {
-      if (counts && typeof counts === 'object' && Object.values(counts).some(v => Number(v) > 0)) {
+      if (DATE_REGEX.test(d) && counts && typeof counts === 'object' && Object.values(counts).some(v => Number(v) > 0)) {
+        dates.add(d);
+      }
+    });
+  }
+  if (dailyPackageCounts && typeof dailyPackageCounts === 'object') {
+    Object.entries(dailyPackageCounts).forEach(([d, counts]) => {
+      if (DATE_REGEX.test(d) && counts && typeof counts === 'object' && Object.values(counts).some(v => Number(v) > 0)) {
+        dates.add(d);
+      }
+    });
+  }
+  if (dailyTicketCounts && typeof dailyTicketCounts === 'object') {
+    Object.entries(dailyTicketCounts).forEach(([d, counts]) => {
+      if (DATE_REGEX.test(d) && counts && typeof counts === 'object' && Object.values(counts).some(v => Number(v) > 0)) {
         dates.add(d);
       }
     });
   }
   if (ticketSalesData && typeof ticketSalesData === 'object') {
     Object.entries(ticketSalesData).forEach(([d, counts]) => {
-      if (counts && typeof counts === 'object' && Object.values(counts).some(v => Number(v) > 0)) {
+      if (DATE_REGEX.test(d) && counts && typeof counts === 'object' && Object.values(counts).some(v => Number(v) > 0)) {
         dates.add(d);
       }
     });
   }
   if (operatorAssignments && typeof operatorAssignments === 'object') {
     Object.entries(operatorAssignments).forEach(([d, assigns]) => {
-      if (assigns && typeof assigns === 'object' && Object.keys(assigns).length > 0) {
+      if (DATE_REGEX.test(d) && assigns && typeof assigns === 'object' && Object.keys(assigns).length > 0) {
         dates.add(d);
       }
     });
   }
   if (packageSales && typeof packageSales === 'object') {
     Object.entries(packageSales).forEach(([d, sales]) => {
-      if (sales && typeof sales === 'object' && Object.keys(sales).length > 0) {
+      if (DATE_REGEX.test(d) && sales && typeof sales === 'object' && Object.keys(sales).length > 0) {
         dates.add(d);
       }
     });
   }
   if (attendance && typeof attendance === 'object') {
     Object.entries(attendance).forEach(([d, att]) => {
-      if (att && typeof att === 'object' && Object.keys(att).length > 0) {
+      if (DATE_REGEX.test(d) && att && typeof att === 'object' && Object.keys(att).length > 0) {
         dates.add(d);
       }
     });
   }
   if (maintenanceTickets && typeof maintenanceTickets === 'object') {
     Object.entries(maintenanceTickets).forEach(([d, tickets]) => {
-      if (tickets && typeof tickets === 'object' && Object.keys(tickets).length > 0) {
+      if (DATE_REGEX.test(d) && tickets && typeof tickets === 'object' && Object.keys(tickets).length > 0) {
         dates.add(d);
       }
     });
@@ -296,6 +339,7 @@ export const findPreviousAssignmentsDate = (
 
   const validDates = Object.entries(operatorAssignments)
     .filter(([d, assigns]) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
       if (!assigns || typeof assigns !== 'object') return false;
       return Object.values(assigns).some((arr: any) => {
         if (Array.isArray(arr)) return arr.length > 0;
@@ -332,6 +376,7 @@ export const findPreviousTicketSalesAssignmentsDate = (
 
   const validDates = Object.entries(ticketSalesAssignments)
     .filter(([d, assigns]) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
       if (!assigns || typeof assigns !== 'object') return false;
       return Object.values(assigns).some((arr: any) => {
         if (Array.isArray(arr)) return arr.length > 0;
@@ -356,6 +401,14 @@ export const findPreviousTicketSalesAssignmentsDate = (
 
   return validDates[validDates.length - 1];
 };
+
+export const DEFAULT_OTHER_SALES_CATEGORIES: string[] = [
+  'Merchandise',
+  'Food & Beverage',
+  'Photo Booth',
+  'Locker Rental',
+  'Game Tokens'
+];
 
 
 

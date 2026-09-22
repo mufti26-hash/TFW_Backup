@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "Toggi Fun World Operations",
+  "short_name": "TFW Operations",
+  "description": "Theme park operations, maintenance dispatch, and emergency audio sound alert system.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#111827",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "/tbg-logo.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

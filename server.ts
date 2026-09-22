@@ -16,7 +16,7 @@ import {
   getDhakaDateString,
   formatDhakaTime
 } from './constants';
-import { saveToSqlite, loadFromSqlite, getSqliteStats } from './sqliteDb';
+import { saveToSqlite, loadFromSqlite, getSqliteStats, getSqliteDatabase } from './sqliteDb';
 
 // Ensure production mode if running from compiled server.cjs bundle
 if (typeof __filename !== 'undefined' && __filename.endsWith('.cjs')) {
@@ -84,13 +84,7 @@ const DEFAULT_DELETED_WA_MSG_IDS: string[] = [
   'AC01468942F9A7C2C8584955E3FD1EA8'
 ];
 
-const DEFAULT_DELETED_SIGNATURES: string[] = [
-  'ride-101-level17paintballbunkerneedsair',
-  'level17paintballbunkerneedsair',
-  'paintballbunkerneedsairrefill',
-  'bunkerneedsairrefill',
-  'level17paintballbunker'
-];
+const DEFAULT_DELETED_SIGNATURES: string[] = [];
 
 function isTicketDeleted(
   db: any,
@@ -142,15 +136,6 @@ function isTicketDeleted(
       if (dsClean.length >= 12 && (normProb === dsClean || normProb.includes(dsClean))) {
         return true;
       }
-    }
-
-    if (
-      normProb.includes('paintballbunkerneedsair') ||
-      normProb.includes('bunkerneedsairrefill') ||
-      normProb.includes('level17paintballbunker') ||
-      normProb.includes('paintballbunker')
-    ) {
-      return true;
     }
   }
   return false;
@@ -427,6 +412,33 @@ function loadDatabase(): any {
     try {
       const sqliteState = loadFromSqlite();
       if (sqliteState && sqliteState.config && sqliteState.data && Object.keys(sqliteState.config.rides || {}).length > 0) {
+        if (!sqliteState.data.dailyCounts) sqliteState.data.dailyCounts = {};
+        if (!sqliteState.data.dailyPackageCounts) sqliteState.data.dailyPackageCounts = {};
+        if (!sqliteState.data.dailyTicketCounts) sqliteState.data.dailyTicketCounts = {};
+        
+        // Also check if database.json has any dailyCounts or dates not yet synced
+        if (fs.existsSync(DB_FILE)) {
+          try {
+            const jsonDb = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
+            if (jsonDb?.data?.dailyCounts) {
+              for (const [d, counts] of Object.entries(jsonDb.data.dailyCounts as Record<string, any>)) {
+                if (!sqliteState.data.dailyCounts[d]) {
+                  sqliteState.data.dailyCounts[d] = counts;
+                }
+                if (!sqliteState.data.dailyPackageCounts[d]) {
+                  sqliteState.data.dailyPackageCounts[d] = {};
+                }
+                for (const [rId, c] of Object.entries(counts || {})) {
+                  const num = Number(c) || 0;
+                  if (num > 0 && !sqliteState.data.dailyPackageCounts[d][rId]) {
+                    sqliteState.data.dailyPackageCounts[d][rId] = num;
+                  }
+                }
+              }
+            }
+          } catch (_) {}
+        }
+
         console.log(`⚡ Loaded database state from offline SQLite database (version: ${sqliteState.version}, rides: ${Object.keys(sqliteState.config.rides || {}).length})`);
         memoryDb = sqliteState;
         return memoryDb;
@@ -451,6 +463,8 @@ function loadDatabase(): any {
       
       // Initialize only missing data collections (preserve empty objects if user cleared them)
       if (parsed.data.dailyCounts === undefined) parsed.data.dailyCounts = {};
+      if (parsed.data.dailyPackageCounts === undefined) parsed.data.dailyPackageCounts = {};
+      if (parsed.data.dailyTicketCounts === undefined) parsed.data.dailyTicketCounts = {};
       if (parsed.data.ticketSalesData === undefined) parsed.data.ticketSalesData = {};
       if (parsed.data.operatorAssignments === undefined) parsed.data.operatorAssignments = {};
       if (parsed.data.ticketSalesAssignments === undefined) parsed.data.ticketSalesAssignments = {};
@@ -461,6 +475,27 @@ function loadDatabase(): any {
 
       // Auto-heal / correct any tickets where Virtual Egg was previously tagged as VR Tank
       let healed = false;
+
+      // Auto-heal dailyPackageCounts and dailyTicketCounts from dailyCounts for all historical dates
+      if (parsed.data?.dailyCounts && typeof parsed.data.dailyCounts === 'object') {
+        if (!parsed.data.dailyPackageCounts || typeof parsed.data.dailyPackageCounts !== 'object') parsed.data.dailyPackageCounts = {};
+        if (!parsed.data.dailyTicketCounts || typeof parsed.data.dailyTicketCounts !== 'object') parsed.data.dailyTicketCounts = {};
+        for (const [d, counts] of Object.entries(parsed.data.dailyCounts as Record<string, any>)) {
+          if (!parsed.data.dailyPackageCounts[d]) parsed.data.dailyPackageCounts[d] = {};
+          if (!parsed.data.dailyTicketCounts[d]) parsed.data.dailyTicketCounts[d] = {};
+          for (const [rId, c] of Object.entries(counts || {})) {
+            const num = Number(c) || 0;
+            if (num > 0) {
+              const currentPkg = Number(parsed.data.dailyPackageCounts[d][rId]) || 0;
+              const currentTkt = Number(parsed.data.dailyTicketCounts[d][rId]) || 0;
+              if (currentPkg === 0 && currentTkt === 0) {
+                parsed.data.dailyPackageCounts[d][rId] = num;
+                healed = true;
+              }
+            }
+          }
+        }
+      }
       if (parsed.data.maintenanceTickets) {
         for (const dayTickets of Object.values(parsed.data.maintenanceTickets) as any[]) {
           if (dayTickets && typeof dayTickets === 'object') {
@@ -496,7 +531,16 @@ function loadDatabase(): any {
       if (parsed.config.ticketSalesPersonnel === undefined) parsed.config.ticketSalesPersonnel = TICKET_SALES_PERSONNEL;
       if (parsed.config.counters === undefined) parsed.config.counters = COUNTERS;
       if (parsed.config.maintenancePersonnel === undefined) parsed.config.maintenancePersonnel = MAINTENANCE_PERSONNEL;
-      if (parsed.config.packages === undefined) parsed.config.packages = DEFAULT_PACKAGES;
+      if (parsed.config.packages === undefined) {
+        parsed.config.packages = DEFAULT_PACKAGES;
+      } else if (Array.isArray(parsed.config.packages)) {
+        DEFAULT_PACKAGES.forEach(defPkg => {
+          if (!parsed.config.packages.some((p: any) => p.name.trim().toLowerCase() === defPkg.name.trim().toLowerCase())) {
+            parsed.config.packages.push(defPkg);
+            healed = true;
+          }
+        });
+      }
       if (parsed.config.floors === undefined) parsed.config.floors = FLOORS;
       if (parsed.config.otherSalesCategories === undefined) {
         parsed.config.otherSalesCategories = ['Merchandise', 'Food & Beverage', 'Photo Booth', 'Locker Rental', 'Game Tokens'];
@@ -796,6 +840,41 @@ function setValueByPath(obj: any, pathStr: string, value: any, isExplicitReopen:
     }
   }
 
+  // Synchronize guest counts across dailyPackageCounts, dailyTicketCounts, and dailyCounts
+  // Ensuring total guest count = package count + ticket count always
+  if (parts.length === 4 && parts[0] === 'data') {
+    const coll = parts[1];
+    const targetDate = parts[2];
+    const targetRideId = parts[3];
+
+    if (['dailyCounts', 'dailyPackageCounts', 'dailyTicketCounts'].includes(coll)) {
+      if (!obj.data) obj.data = {};
+      if (!obj.data.dailyCounts) obj.data.dailyCounts = {};
+      if (!obj.data.dailyPackageCounts) obj.data.dailyPackageCounts = {};
+      if (!obj.data.dailyTicketCounts) obj.data.dailyTicketCounts = {};
+      if (!obj.data.dailyCounts[targetDate]) obj.data.dailyCounts[targetDate] = {};
+      if (!obj.data.dailyPackageCounts[targetDate]) obj.data.dailyPackageCounts[targetDate] = {};
+      if (!obj.data.dailyTicketCounts[targetDate]) obj.data.dailyTicketCounts[targetDate] = {};
+
+      if (coll === 'dailyPackageCounts') {
+        const p = Number(value) || 0;
+        const t = Number(obj.data.dailyTicketCounts[targetDate]?.[targetRideId]) || 0;
+        obj.data.dailyCounts[targetDate][targetRideId] = p + t;
+      } else if (coll === 'dailyTicketCounts') {
+        const p = Number(obj.data.dailyPackageCounts[targetDate]?.[targetRideId]) || 0;
+        const t = Number(value) || 0;
+        obj.data.dailyCounts[targetDate][targetRideId] = p + t;
+      } else if (coll === 'dailyCounts') {
+        const tot = Number(value) || 0;
+        const p = Number(obj.data.dailyPackageCounts[targetDate]?.[targetRideId]) || 0;
+        const t = Number(obj.data.dailyTicketCounts[targetDate]?.[targetRideId]) || 0;
+        if (p === 0 && t === 0 && tot > 0) {
+          obj.data.dailyPackageCounts[targetDate][targetRideId] = tot;
+        }
+      }
+    }
+  }
+
   return obj;
 }
 
@@ -903,7 +982,16 @@ async function startServer() {
       if (maintenanceStatusTab) memoryDb.config.appConfig.activeMaintenanceStatusTab = maintenanceStatusTab;
       if (maintenanceViewScope) memoryDb.config.appConfig.activeMaintenanceViewScope = maintenanceViewScope;
 
-      saveDatabaseToDisk({ type: 'sync', activeDate, activeView, senderId, force: true });
+      saveDatabaseToDisk({ 
+        type: 'sync', 
+        activeDate, 
+        activeView, 
+        maintenancePortal, 
+        maintenanceStatusTab, 
+        maintenanceViewScope, 
+        senderId, 
+        force: true 
+      });
       // Broadcast current operators explicitly so all connected clients update associates immediately
       broadcastMutation({
         type: 'set',
@@ -987,7 +1075,52 @@ async function startServer() {
       trimHistoryLogs(db);
     }
     saveDatabaseToDisk({ type: 'set', path: pathStr, value, senderId });
+
+    // Instantly broadcast dedicated issue-reported event if an issue was reported
+    if (pathStr.startsWith('data/maintenanceTickets') && value && typeof value === 'object' && value.status === 'reported') {
+      broadcastMutation({
+        type: 'issue-reported',
+        ticket: value,
+        rideName: value.rideName,
+        problem: value.problem,
+        priority: value.priority,
+        source: value.source,
+        reportedByName: value.reportedByName,
+        reportedByRole: value.reportedByRole,
+        date: value.date,
+        senderId
+      });
+    }
+
     res.json({ success: true, version: db.version });
+  });
+
+  // Dedicated High-Priority Maintenance Ticket Reporting Endpoint with Guaranteed Multi-Device Broadcast
+  app.post('/api/maintenance/report-issue', (req, res) => {
+    const { ticket, senderId } = req.body;
+    if (!ticket || !ticket.id || !ticket.date) {
+      return res.status(400).json({ error: 'Valid ticket object with id and date is required.' });
+    }
+    const db = loadDatabase();
+    const ticketPath = `data/maintenanceTickets/${ticket.date}/${ticket.id}`;
+    setValueByPath(db, ticketPath, ticket);
+    saveDatabaseToDisk({ type: 'set', path: ticketPath, value: ticket, senderId });
+
+    // Guaranteed instant audio and state broadcast to ALL connected devices (mobile, tablet, desktop)
+    broadcastMutation({
+      type: 'issue-reported',
+      ticket,
+      rideName: ticket.rideName,
+      problem: ticket.problem,
+      priority: ticket.priority,
+      source: ticket.source,
+      reportedByName: ticket.reportedByName,
+      reportedByRole: ticket.reportedByRole,
+      date: ticket.date,
+      senderId
+    });
+
+    res.json({ success: true, version: db.version, ticket });
   });
 
   // Atomic Increment/Decrement (High concurrency protection)
@@ -2503,20 +2636,7 @@ async function startServer() {
     }
   }
 
-  // Register Green API webhook on startup
-  setTimeout(() => {
-    configureGreenApiWebhook().catch(() => {});
-  }, 1000);
-
-  // Background periodic polling every 25 seconds for reliable message detection without hitting rate limits
-  setInterval(() => {
-    syncGreenApiGroupMessages().catch(() => {});
-  }, 25000);
-
-  // Initial sync 2 seconds after startup
-  setTimeout(() => {
-    syncGreenApiGroupMessages(true).catch(() => {});
-  }, 2000);
+  // Green API / WhatsApp polling removed per workflow requirements
 
   // Batch update
   app.post('/api/db/update', (req, res) => {
@@ -2554,6 +2674,27 @@ async function startServer() {
     setValueByPath(db, pathStr, null);
     saveDatabaseToDisk({ type: 'remove', path: pathStr, senderId });
     res.json({ success: true, version: db.version });
+  });
+
+  // Clear all maintenance issue records across database and disk
+  app.post('/api/maintenance/clear-all', (req, res) => {
+    const { senderId } = req.body || {};
+    const db = loadDatabase();
+    db.data.maintenanceTickets = {};
+    if (db.config?.deletedTicketIds) db.config.deletedTicketIds = [];
+    try {
+      const sqlite = getSqliteDatabase();
+      sqlite.exec('DELETE FROM maintenance_tickets;');
+    } catch (e) {
+      console.warn('Could not clear sqlite maintenance_tickets:', e);
+    }
+    saveDatabaseToDisk({ type: 'update', updates: { 'data/maintenanceTickets': {} }, senderId });
+    broadcastMutation({
+      type: 'update',
+      updates: { 'data/maintenanceTickets': {} },
+      senderId
+    });
+    res.json({ success: true, message: 'All maintenance records cleared successfully. Starting fresh from today.' });
   });
 
   // Permanently delete a maintenance ticket across all dates and cache
@@ -2657,6 +2798,8 @@ async function startServer() {
     }
     const db = loadDatabase();
     if (db.data.dailyCounts) delete db.data.dailyCounts[date];
+    if (db.data.dailyPackageCounts) delete db.data.dailyPackageCounts[date];
+    if (db.data.dailyTicketCounts) delete db.data.dailyTicketCounts[date];
     if (db.data.ticketSalesData) delete db.data.ticketSalesData[date];
     if (db.data.operatorAssignments) delete db.data.operatorAssignments[date];
     if (db.data.ticketSalesAssignments) delete db.data.ticketSalesAssignments[date];
@@ -2674,7 +2817,7 @@ async function startServer() {
       return res.status(400).json({ error: 'cutoffDate is required' });
     }
     const db = loadDatabase();
-    const collections = ['dailyCounts', 'ticketSalesData', 'operatorAssignments', 'ticketSalesAssignments', 'attendance', 'packageSales', 'maintenanceTickets'];
+    const collections = ['dailyCounts', 'dailyPackageCounts', 'dailyTicketCounts', 'ticketSalesData', 'operatorAssignments', 'ticketSalesAssignments', 'attendance', 'packageSales', 'maintenanceTickets'];
     const allDates = new Set<string>();
     
     collections.forEach(col => {
